@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .extract import Page
+from .vocab import correct_field, SPECIES, HOME_WORLDS, PURPOSES, correct as vocab_correct
 
 CASE_RE = re.compile(r"MIB-\d{4,}")
 VISA_RE = re.compile(r"\b(XW-1|XW-2|DIP-1|MED-3|TRANSIT-7)\b")
@@ -220,6 +221,97 @@ def _extract_finding(text: str):
     return None, ""
 
 
+# Inline "Label: value" field labels, canonicalized -> field name. Scanned
+# pages render fields inline (unlike the stacked layout of digital pages).
+INLINE_LABELS = {
+    "caseid": "case_id",
+    "applicant": "applicant_name",
+    "registryname": "applicant_name",
+    "speciescode": "species_code",
+    "speciesmatch": "species_code",
+    "homeworld": "home_world",
+    "visaclass": "visa_class",
+    "sponsorid": "sponsor_id",
+    "arrivaldate": "arrival_date",
+    "declaredpurpose": "declared_purpose",
+    "registrystatus": "registry_status",
+    "feestatus": "fee_status",
+    "waivercode": "waiver_code",
+}
+
+
+def _canon_label(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def _valid_date(s: str) -> bool:
+    import datetime as _dt
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", s or "")
+    if not m:
+        return False
+    try:
+        _dt.date(int(m[1]), int(m[2]), int(m[3]))
+        return True
+    except ValueError:
+        return False
+
+
+def _inline_fields(lines: List[str]) -> Dict[str, str]:
+    """Parse inline 'Label: value' lines with OCR-tolerant label matching."""
+    out: Dict[str, str] = {}
+    for ln in lines:
+        if ":" not in ln:
+            continue
+        label, _, value = ln.partition(":")
+        value = value.strip()
+        if not value:
+            continue
+        key = _canon_label(label)
+        fld = INLINE_LABELS.get(key)
+        if fld is None and len(key) >= 6:
+            # OCR-noised label: accept a unique fuzzy match.
+            hit = vocab_correct(key, INLINE_LABELS.keys(), max_ratio=0.3)
+            fld = INLINE_LABELS.get(hit) if hit else None
+        if fld and not _is_damage(value):
+            # Values sometimes run into placeholder text ("... PASSPORT IMAGE").
+            value = re.sub(r"\s*(PASSPORT|REGISTRY|SCAN)\s+IMAGE.*$", "", value).strip()
+            if value:
+                out.setdefault(fld, value)
+    return out
+
+
+def _pattern_sweep(lines: List[str]) -> Dict[str, str]:
+    """Recover typed values whose labels OCR destroyed (e.g. '2: SPN-7720').
+
+    Only unambiguous shapes are claimed: SPN ids, ISO dates, visa classes, and
+    values that match the closed species/world/purpose vocabularies.
+    """
+    out: Dict[str, str] = {}
+    for ln in lines:
+        if _is_damage(ln):
+            continue
+        m = SPONSOR_RE.search(ln)
+        if m:
+            out.setdefault("sponsor_id", m.group(0))
+        m = DATE_RE.search(ln)
+        if m and _valid_date(m.group(1)):
+            out.setdefault("arrival_date", m.group(1))
+        m = VISA_RE.search(ln.upper().replace(" ", ""))
+        if m:
+            out.setdefault("visa_class", m.group(1))
+        # Vocabulary-shaped values (checked on the post-colon tail if present).
+        tail = ln.partition(":")[2].strip() if ":" in ln else ln.strip()
+        if tail and not VISA_RE.search(tail.upper().replace(" ", "")):
+            # (visa-class tails are excluded so "TRANSIT-7" can't fuzzy-match the
+            # purpose "transit")
+            for fld, vocab in (("species_code", SPECIES), ("home_world", HOME_WORLDS),
+                               ("declared_purpose", PURPOSES)):
+                hit = vocab_correct(tail, vocab, max_ratio=0.25)
+                if hit:
+                    out.setdefault(fld, hit)
+    return out
+
+
 def _header_case_id(page: Page) -> Optional[str]:
     for ln in page.visible_lines:
         m = CASE_RE.search(ln)
@@ -253,22 +345,31 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             if not t.startswith("Packet ") and t != "Synthetic hiring challenge document" and t not in ALL_LABELS:
                 meaningful_visible = True
 
-        if title.startswith("FORM I-8090") or "Primary intake record" in text:
+        # Page-type detection tolerates OCR-garbled titles by looking for
+        # distinctive markers anywhere in the visible text.
+        if (title.startswith("FORM I-8090") or "I-8090" in text
+                or "Authorization Intake" in text or "Primary intake record" in text):
             kv = _kv_vertical(vis, INTAKE_LABELS)
+            for k, v in _inline_fields(vis).items():
+                kv.setdefault(k, v)
             for k, v in kv.items():
                 intake.setdefault(k, v)
             rec.present_pages.append("intake")
 
-        elif title.startswith("Planetary Registry"):
+        elif title.startswith("Planetary Registry") or "Registry Extract" in text:
             kv = _kv_vertical(vis, REGISTRY_LABELS)
+            for k, v in _inline_fields(vis).items():
+                kv.setdefault(k, v)
             for k, v in kv.items():
                 registry.setdefault(k, v)
             rec.present_pages.append("registry")
 
-        elif title.startswith("MIB Fee Receipt"):
+        elif title.startswith("MIB Fee Receipt") or "Fee Receipt" in text:
             kv = _kv_vertical(vis, {"Fee Status": "fee_status", "Waiver Code": "waiver_code"})
+            for k, v in _inline_fields(vis).items():
+                kv.setdefault(k, v)
             if kv.get("fee_status"):
-                fs = kv["fee_status"].strip().lower()
+                fs = correct_field("fee_status", kv["fee_status"].strip().lower())
                 if fs in FEE_VALUES:
                     rec.fee_status = fs
                     rec.fee_observed = True
@@ -276,7 +377,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 rec.waiver_code = kv["waiver_code"].strip()
             rec.present_pages.append("fee")
 
-        elif title.startswith("FORM B-13") or "Biometric" in title:
+        elif title.startswith("FORM B-13") or "B-13" in text or "Biometric" in text:
             inl = _kv_inline(vis)
             biometric = inl
             obs = inl.get("Observed flags", "")
@@ -292,7 +393,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 sponsor_names.append(inl["Applicant"])
             rec.present_pages.append("biometric")
 
-        elif title.startswith("Sponsor Attestation"):
+        elif title.startswith("Sponsor Attestation") or "Sponsor Attestation" in text or "attests that" in text:
             m = SPONSOR_RE.search(text)
             if m:
                 rec.sponsor_letter_id = m.group(0)
@@ -307,7 +408,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 rec.sponsor_letter_visa = vm.group(1)
             rec.present_pages.append("sponsor")
 
-        elif title.startswith("Manual Adjudicator Note"):
+        elif title.startswith("Manual Adjudicator Note") or "Adjudicator Note" in text:
             finding, reason = _extract_finding(text)
             rec.note = Note(finding=finding, reason=reason, raw=text)
             fc = re.search(r"fee status is (paid|waived|unpaid|unknown)", text, re.I)
@@ -340,6 +441,34 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     rec.declared_purpose = pick("declared_purpose", ("intake", intake), ("sponsor", sponsor_d))
     rec.registry_status = registry.get("registry_status", "")
 
+    # Last-resort recovery for OCR pages whose labels were destroyed: sweep the
+    # packet's visible lines for unambiguously-typed values, filling only fields
+    # that are still empty.
+    if any(p.ocr_used for p in use_pages):
+        sweep_lines: List[str] = []
+        for p in use_pages:
+            sweep_lines.extend(p.visible_lines)
+        swept = _pattern_sweep(sweep_lines)
+        for fld in ("sponsor_id", "arrival_date", "visa_class", "species_code",
+                    "home_world", "declared_purpose"):
+            if not getattr(rec, fld) and swept.get(fld):
+                rec.field_sources[fld] = "sweep"
+                setattr(rec, fld, swept[fld])
+
+    # Keep only calendar-valid arrival dates; an OCR-misread impossible date is
+    # not trusted evidence.
+    if rec.arrival_date:
+        dm = DATE_RE.search(rec.arrival_date)
+        rec.arrival_date = dm.group(1) if (dm and _valid_date(dm.group(1))) else ""
+
+    # Closed-vocabulary correction: repair OCR character noise on fields whose
+    # value space is a known small set (also fixes policy checks that depend on
+    # exact values, e.g. embargo-world matching).
+    for fld in ("species_code", "home_world", "visa_class", "declared_purpose"):
+        val = getattr(rec, fld)
+        if val:
+            setattr(rec, fld, correct_field(fld, val))
+
     # Blank out fields whose visible value is a damage marker so the
     # completeness gate correctly treats them as unrecoverable.
     for fld in ("applicant_name", "species_code", "home_world", "visa_class",
@@ -350,7 +479,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     # Sponsor: intake form primary, sponsor letter as fallback. Only accept a
     # value that actually matches the SPN-#### pattern (guards against watermark
     # traps like "SAMPLE DENIAL" landing in the value slot).
-    sponsor = intake.get("sponsor_id") or rec.sponsor_letter_id
+    sponsor = intake.get("sponsor_id") or rec.sponsor_letter_id or rec.sponsor_id
     m = SPONSOR_RE.search(sponsor or "")
     rec.sponsor_id = m.group(0) if m else ""
 
