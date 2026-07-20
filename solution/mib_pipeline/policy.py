@@ -70,19 +70,20 @@ REASON_CONFIDENCE = {
     "no_trusted_evidence": 0.50,
     "disqualifying_flag": 0.95,
     "transit_class": 0.92,
-    "transit_purpose": 0.42,
-    "embargo_world": 0.90,
-    "revoked_sponsor": 0.74,
-    "fee_unpaid": 0.86,
-    "stale_application": 0.90,
-    "fee_unknown": 0.93,
-    "missing_arrival_date": 0.38,
+    "transit_purpose": 0.40,
+    "embargo_world": 0.82,
+    "revoked_sponsor": 0.70,
+    "fee_unpaid": 0.90,
+    "stale_application": 0.46,
+    "stale_ocr": 0.40,
+    "fee_unknown": 0.95,
+    "missing_arrival_date": 0.36,
     "review_flag": 0.95,
-    "identity_conflict": 0.40,
+    "identity_conflict": 0.42,
     "unsupported_waiver": 0.45,
-    "incomplete_evidence": 0.22,
-    "clean_unverified": 0.34,
-    "approved_dip": 0.70,
+    "incomplete_evidence": 0.26,
+    "clean_unverified": 0.20,
+    "approved_dip": 0.69,
 }
 
 
@@ -141,7 +142,11 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
     if rec.fee_observed and fee == "unpaid" and not _valid_waiver(rec):
         return "DENIED", _conf("fee_unpaid"), "fee_unpaid"
     # Staleness: arrival more than 180 days before packet receipt (non-DIP).
+    # On OCR-parsed packets the date itself may be a misread, so a stale-looking
+    # date is only grounds for review, not denial.
     if now and ad and (now - ad).days > STALE_DAYS and visa != "DIP-1":
+        if rec.ocr_used:
+            return "NEEDS_REVIEW", _conf("stale_ocr"), "stale_ocr"
         return "DENIED", _conf("stale_application"), "stale_application"
 
     # --- Review conditions -> NEEDS_REVIEW ---

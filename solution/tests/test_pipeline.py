@@ -72,6 +72,33 @@ def test_clean_nondip_routes_to_review():
     assert adjudicate(rec, now=date(2026, 6, 1))[0] == "NEEDS_REVIEW"
 
 
+def test_vocab_correction():
+    from mib_pipeline.vocab import correct_field
+    assert correct_field("species_code", "ANOROMEDAN") == "ANDROMEDAN"
+    assert correct_field("home_world", "Wolf-1061¢") == "Wolf-1061c"
+    assert correct_field("visa_class", "TRANS1T-7") == "TRANSIT-7"
+    # unknown values pass through instead of being force-mapped
+    assert correct_field("home_world", "Somewhere Entirely New") == "Somewhere Entirely New"
+
+
+def test_inline_fields_ocr_layout():
+    from mib_pipeline.parse import _inline_fields, _pattern_sweep
+    lines = ["Case 1D: MIS-00te90", "Applicant: Zatari", "Species Code: ANDROMEDAN PASSPORT IMAGE",
+             "Home World: Wolf-1061c", "2: SPN-7720", "e: 2026-03-10"]
+    kv = _inline_fields(lines)
+    assert kv["applicant_name"] == "Zatari"
+    assert kv["species_code"] == "ANDROMEDAN"  # placeholder tail stripped
+    swept = _pattern_sweep(lines)
+    assert swept["sponsor_id"] == "SPN-7720"
+    assert swept["arrival_date"] == "2026-03-10"
+
+
+def test_invalid_calendar_date_rejected():
+    from mib_pipeline.pipeline import _clean_date
+    assert _clean_date("2026-02-31") == "1900-01-01"
+    assert _clean_date("2026-02-28") == "2026-02-28"
+
+
 def test_hidden_injection_ignored():
     """The white-text answer-key injection in MIB-000003 must not force APPROVED."""
     pytest.importorskip("fitz")

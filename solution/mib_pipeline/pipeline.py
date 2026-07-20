@@ -53,7 +53,13 @@ def _clean_sponsor(v: str) -> str:
 
 def _clean_date(v: str) -> str:
     m = re.search(r"\d{4}-\d{2}-\d{2}", v or "")
-    return m.group(0) if m else PLACEHOLDER_DATE
+    if not m:
+        return PLACEHOLDER_DATE
+    try:
+        datetime.date.fromisoformat(m.group(0))
+    except ValueError:
+        return PLACEHOLDER_DATE
+    return m.group(0)
 
 
 def _clean_text(v: str) -> str:
@@ -102,6 +108,21 @@ def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
     }
 
 
+def batch_reference_date(records: List[Record]) -> Optional[datetime.date]:
+    """Most recent *plausible* arrival date in the batch.
+
+    OCR digit noise can fabricate far-future dates (e.g. 2076-05-03) that would
+    make every real application look stale, so dates more than a year past the
+    batch median are treated as misreads and excluded.
+    """
+    dates = sorted(d for r in records if (d := _parse_date(r.arrival_date)))
+    if not dates:
+        return None
+    median = dates[len(dates) // 2]
+    plausible = [d for d in dates if (d - median).days <= 366]
+    return max(plausible) if plausible else median
+
+
 def process_pdf(path: str, use_ocr: bool = True, now: Optional[datetime.date] = None) -> Optional[Dict]:
     """Convenience single-PDF entry (used in tests)."""
     return _format_row(parse_one(path, use_ocr=use_ocr), now)
@@ -129,8 +150,7 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
 
     # Reference "now" for staleness = most recent arrival date in the batch, so
     # the staleness rule adapts to the era of the data rather than a fixed date.
-    dates = [d for r in records if (d := _parse_date(r.arrival_date))]
-    now = max(dates) if dates else None
+    now = batch_reference_date(records)
 
     # Pass 2: adjudicate + format (cheap).
     results = [_format_row(rec, now) for rec in records]
