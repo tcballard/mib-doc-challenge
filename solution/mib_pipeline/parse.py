@@ -501,9 +501,22 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
         rec.fee_observed = True
 
     # Identity conflict: intake vs registry/biometric name or species disagree.
-    names = {v.lower() for v in [intake.get("applicant_name"), registry.get("applicant_name"), biometric.get("Applicant")] if v}
-    specs = {v.upper() for v in [intake.get("species_code"), registry.get("species_code"), biometric.get("species_code")] if v}
-    if len(names) > 1 or len(specs) > 1:
+    # Comparison is fuzzy — OCR renders the same name slightly differently
+    # across passes/pages, and near-identical strings are the same identity,
+    # not a conflict.
+    from .vocab import _edit_distance, _canon
+
+    def _really_different(a: str, b: str) -> bool:
+        ca, cb = _canon(a), _canon(b)
+        if not ca or not cb or ca in cb or cb in ca:
+            return False
+        tol = max(2, int(0.34 * max(len(ca), len(cb))))
+        return _edit_distance(ca, cb, cap=tol) > tol
+
+    names = [v for v in [intake.get("applicant_name"), registry.get("applicant_name"), biometric.get("Applicant")] if v and not _is_damage(v)]
+    specs = [correct_field("species_code", v) for v in [intake.get("species_code"), registry.get("species_code"), biometric.get("species_code")] if v and not _is_damage(v)]
+    if any(_really_different(a, b) for i, a in enumerate(names) for b in names[i + 1:]) \
+            or len({s.upper() for s in specs}) > 1:
         rec.identity_conflict = True
 
     return rec

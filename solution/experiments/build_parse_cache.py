@@ -15,5 +15,5 @@ if __name__ == "__main__":
     with mp.Pool(4) as pool:
         for cid, d in pool.imap_unordered(work, files, chunksize=8):
             out[cid] = d
-    json.dump(out, open("/tmp/parse_cache_v5.json", "w"))
+    json.dump(out, open("/tmp/parse_cache_v6.json", "w"))
     print("cached", len(out))
