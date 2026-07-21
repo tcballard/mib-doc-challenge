@@ -62,13 +62,20 @@ def test_disqualifiers():
     assert adjudicate(rec)[0] == "DENIED"
 
 
-def test_clean_nondip_routes_to_review():
-    # Complete, clean, non-DIP -> conservative review, never a speculative approve.
+def test_clean_complete_packet_approved():
+    # Complete, clean packet with no disqualifier or review trigger -> approve.
     rec = Record(
         case_id="X", applicant_name="A B", species_code="ORION_GRAYS",
         home_world="Kepler-186f", visa_class="XW-2", sponsor_id="SPN-1042",
         arrival_date="2026-05-01", fee_status="paid", fee_observed=True,
     )
+    assert adjudicate(rec, now=date(2026, 6, 1))[0] == "APPROVED"
+
+
+def test_incomplete_packet_not_approved():
+    # Missing core fields -> review, never a speculative approve.
+    rec = Record(case_id="X", applicant_name="A B", visa_class="XW-2",
+                 fee_status="paid", fee_observed=True)
     assert adjudicate(rec, now=date(2026, 6, 1))[0] == "NEEDS_REVIEW"
 
 

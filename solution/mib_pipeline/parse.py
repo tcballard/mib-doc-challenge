@@ -7,6 +7,7 @@ contain more than one applicant.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -15,6 +16,13 @@ from .vocab import correct_field, SPECIES, HOME_WORLDS, PURPOSES, correct as voc
 
 CASE_RE = re.compile(r"MIB-\d{4,}")
 VISA_RE = re.compile(r"\b(XW-1|XW-2|DIP-1|MED-3|TRANSIT-7)\b")
+
+
+def _visa_normalize(v: str) -> str:
+    """Uppercase and repair OCR-noised separators ('XW.2', 'XW 2') before
+    matching against the visa-class pattern."""
+    repaired = re.sub(r"(?<=[A-Z])[.,_ ](?=\d)", "-", (v or "").upper())
+    return repaired.replace(" ", "")
 SPONSOR_RE = re.compile(r"\bSPN-\d{3,}\b")
 DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 FINDING_RE = re.compile(r"Finding:\s*(APPROVED|DENIED|NEEDS_REVIEW)\.?\s*Reason:\s*(.*)", re.I)
@@ -296,12 +304,12 @@ def _pattern_sweep(lines: List[str]) -> Dict[str, str]:
         m = DATE_RE.search(ln)
         if m and _valid_date(m.group(1)):
             out.setdefault("arrival_date", m.group(1))
-        m = VISA_RE.search(ln.upper().replace(" ", ""))
+        m = VISA_RE.search(_visa_normalize(ln))
         if m:
             out.setdefault("visa_class", m.group(1))
         # Vocabulary-shaped values (checked on the post-colon tail if present).
         tail = ln.partition(":")[2].strip() if ":" in ln else ln.strip()
-        if tail and not VISA_RE.search(tail.upper().replace(" ", "")):
+        if tail and not VISA_RE.search(_visa_normalize(tail)):
             # (visa-class tails are excluded so "TRANSIT-7" can't fuzzy-match the
             # purpose "transit")
             for fld, vocab in (("species_code", SPECIES), ("home_world", HOME_WORLDS),
@@ -441,6 +449,37 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     rec.declared_purpose = pick("declared_purpose", ("intake", intake), ("sponsor", sponsor_d))
     rec.registry_status = registry.get("registry_status", "")
 
+    # Corroboration voting: a value read identically from >=2 independent
+    # sources outranks a single-source precedence pick that nothing else
+    # confirms (OCR misreads rarely repeat verbatim across pages).
+    def _nzv(s):
+        return " ".join((s or "").split()).casefold()
+
+    def _corroborate(fld, cands):
+        cands = [c for c in cands if c and not _is_damage(c)]
+        cur = getattr(rec, fld)
+        if not cands or not cur:
+            return
+        counts = Counter(_nzv(c) for c in cands)
+        cur_n = counts.get(_nzv(cur), 0)
+        best_n, best = max(((n, v) for v, n in counts.items()), default=(0, ""))
+        if best_n >= 2 and cur_n <= 1 and best != _nzv(cur):
+            for c in cands:  # keep original casing of a corroborated variant
+                if _nzv(c) == best:
+                    rec.field_sources[fld] = "corroboration"
+                    setattr(rec, fld, c)
+                    return
+
+    _corroborate("applicant_name", [intake.get("applicant_name"), registry.get("applicant_name"),
+                                    biometric.get("Applicant"), rec.sponsor_letter_name])
+    _corroborate("species_code", [intake.get("species_code"), registry.get("species_code"),
+                                  biometric.get("species_code")])
+    spn_occurrences: List[str] = []
+    for p in use_pages:
+        for ln in p.visible_lines:
+            spn_occurrences.extend(SPONSOR_RE.findall(ln))
+    _corroborate("sponsor_id", spn_occurrences)
+
     # Last-resort recovery for OCR pages whose labels were destroyed: sweep the
     # packet's visible lines for unambiguously-typed values, filling only fields
     # that are still empty.
@@ -491,7 +530,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
 
     # Normalize visa class if noisy (OCR).
     if rec.visa_class:
-        vm = VISA_RE.search(rec.visa_class.upper().replace(" ", ""))
+        vm = VISA_RE.search(_visa_normalize(rec.visa_class))
         if vm:
             rec.visa_class = vm.group(1)
 

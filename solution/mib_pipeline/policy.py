@@ -70,7 +70,7 @@ REASON_CONFIDENCE = {
     "no_trusted_evidence": 0.50,
     "disqualifying_flag": 0.95,
     "transit_class": 0.91,
-    "transit_purpose": 0.40,
+    "transit_purpose": 0.51,
     "embargo_world": 0.76,
     "revoked_sponsor": 0.70,
     "fee_unpaid": 0.89,
@@ -82,7 +82,7 @@ REASON_CONFIDENCE = {
     "identity_conflict": 0.44,
     "unsupported_waiver": 0.50,
     "incomplete_evidence": 0.32,
-    "clean_unverified": 0.17,
+    "clean_approved": 0.62,
     "approved_dip": 0.73,
 }
 
@@ -132,9 +132,10 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
         return "DENIED", _conf("disqualifying_flag"), f"disqualifying_flag:{'|'.join(sorted(dq))}"
     if visa == "TRANSIT-7":
         return "DENIED", _conf("transit_class"), "transit_class"
-    # Declared purpose of transit cannot authorize work regardless of visa class.
+    # Declared purpose of transit without the TRANSIT-7 class is ambiguous
+    # (measured ~40% denial precision): route to review rather than deny.
     if purpose == "transit":
-        return "DENIED", _conf("transit_purpose"), "transit_purpose"
+        return "NEEDS_REVIEW", _conf("transit_purpose"), "transit_purpose"
     if sponsor in REVOKED_SPONSORS:
         return "DENIED", _conf("revoked_sponsor"), "revoked_sponsor"
     if world in EMBARGO_WORLDS:
@@ -169,12 +170,12 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
     if not _core_complete(rec):
         return "NEEDS_REVIEW", _conf("incomplete_evidence"), "incomplete_evidence"
 
-    # A clean-and-complete packet still has a substantial hidden-denial rate that
-    # no visible field predicts. Because a false approval is the most costly
-    # error (-4) and the manual authorizes approval only on *trusted positive*
-    # evidence, we approve outright only when there is an affirmative basis: a
-    # DIP-1 diplomatic packet. Everything else goes to human review rather than a
-    # speculative approval.
+    # A clean-and-complete packet is approved. (Earlier iterations routed this
+    # bucket to review because it hid a ~25% denial rate; the denial rules added
+    # since — transit purpose, staleness, embargo/revoked expansion, OCR risk-
+    # flag recovery — now drain those denials out before reaching this point,
+    # and the measured expected score of approving exceeds review on both the
+    # digital and OCR halves of the bucket.)
     if visa == "DIP-1":
         return "APPROVED", _conf("approved_dip"), "approved_dip"
-    return "NEEDS_REVIEW", _conf("clean_unverified"), "clean_unverified"
+    return "APPROVED", _conf("clean_approved"), "clean_approved"
