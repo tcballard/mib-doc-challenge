@@ -70,7 +70,7 @@ REASON_CONFIDENCE = {
     "no_trusted_evidence": 0.50,
     "disqualifying_flag": 0.95,
     "transit_class": 0.91,
-    "transit_purpose": 0.51,
+    "transit_purpose": 0.35,
     "embargo_world": 0.76,
     "revoked_sponsor": 0.70,
     "fee_unpaid": 0.89,
@@ -140,6 +140,10 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
         return "DENIED", _conf("revoked_sponsor"), "revoked_sponsor"
     if world in EMBARGO_WORLDS:
         return "DENIED", _conf("embargo_world"), "embargo_world"
+    # A registry extract stamped for embargo review is denial evidence even when
+    # the world name itself is unreadable (94% denial precision on train).
+    if "EMBARGO" in (rec.registry_status or "").upper():
+        return "DENIED", _conf("embargo_world"), "embargo_registry"
     if rec.fee_observed and fee == "unpaid" and not _valid_waiver(rec):
         return "DENIED", _conf("fee_unpaid"), "fee_unpaid"
     # Staleness: arrival more than 180 days before packet receipt (non-DIP).

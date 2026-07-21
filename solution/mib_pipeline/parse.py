@@ -81,6 +81,55 @@ def _fuzzy_flags(text: str) -> str:
     return "|".join(sorted(set(found)))
 
 
+def _correct_flag_tokens(flags: str) -> str:
+    """Map each flag token onto the closed flag vocabulary (up to 50% OCR
+    noise); tokens with no confident match are dropped."""
+    if flags in ("", "none"):
+        return "none"
+    from .vocab import correct as vocab_correct
+    out = []
+    for token in flags.split("|"):
+        if token in KNOWN_FLAGS:
+            out.append(token)
+            continue
+        hit = vocab_correct(token, KNOWN_FLAGS, max_ratio=0.5)
+        if hit:
+            out.append(hit)
+    return "|".join(sorted(set(out))) if out else "none"
+
+
+_OBSERVED_LABEL = "observedflags"
+
+
+def _garbled_flags(lines: List[str]) -> str:
+    """Recover flags from a heavily OCR-garbled slip ('Obmarved flage:
+    hisharart_yed' -> biohazard_red). The label match tolerates ~45% edit noise
+    and each comma/pipe-separated value token is corrected against the known
+    flag names at up to 50% noise."""
+    from .vocab import _canon, _edit_distance, correct as vocab_correct
+    for ln in lines:
+        if ":" not in ln:
+            continue
+        label, _, value = ln.partition(":")
+        cl = _canon(label)
+        if not cl or abs(len(cl) - len(_OBSERVED_LABEL)) > 5:
+            continue
+        cap = max(1, int(len(_OBSERVED_LABEL) * 0.45))
+        if _edit_distance(cl, _OBSERVED_LABEL, cap=cap + 1) > cap:
+            continue
+        found = []
+        for token in re.split(r"[|,;]", value):
+            token = token.strip()
+            if not token or _canon(token) in ("none", "nome", "norne"):
+                continue
+            hit = vocab_correct(token, KNOWN_FLAGS, max_ratio=0.5)
+            if hit:
+                found.append(hit)
+        if found:
+            return "|".join(sorted(set(found)))
+    return "none"
+
+
 @dataclass
 class Note:
     finding: Optional[str] = None
@@ -385,15 +434,20 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 rec.waiver_code = kv["waiver_code"].strip()
             rec.present_pages.append("fee")
 
-        elif title.startswith("FORM B-13") or "B-13" in text or "Biometric" in text:
+        elif (title.startswith("FORM B-13") or "B-13" in text or "Biometric" in text
+                or re.search(r"\b[B8]\s?[-–—._]?\s?1[23]\b", text)
+                or re.search(r"\b[Bb][il1][o0]met[a-z]{0,3}\b", text)):
             inl = _kv_inline(vis)
             biometric = inl
             obs = inl.get("Observed flags", "")
-            flags = _norm_flags(obs)
+            flags = _correct_flag_tokens(_norm_flags(obs))
             if flags == "none":
                 # OCR may have mangled the "Observed flags:" label; scan the whole
-                # slip for known flag names as a fallback.
+                # slip for known flag names, then fall back to heavy-noise
+                # recovery of the label and value.
                 flags = _fuzzy_flags(text)
+            if flags == "none":
+                flags = _garbled_flags(vis)
             rec.risk_flags = flags
             if inl.get("Species Match"):
                 biometric["species_code"] = inl["Species Match"]
@@ -448,6 +502,20 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     rec.arrival_date = pick("arrival_date", ("intake", intake), ("registry", registry))
     rec.declared_purpose = pick("declared_purpose", ("intake", intake), ("sponsor", sponsor_d))
     rec.registry_status = registry.get("registry_status", "")
+
+    # If no biometric slip was recognized but the packet has OCR pages, the slip
+    # may be hiding on a page too garbled to type-classify: attempt heavy-noise
+    # flag recovery across every visible line.
+    if rec.risk_flags in ("", "none") and "biometric" not in rec.present_pages:
+        all_lines: List[str] = []
+        for p in use_pages:
+            if p.ocr_used:
+                all_lines.extend(p.visible_lines)
+        if all_lines:
+            recovered = _garbled_flags(all_lines)
+            if recovered != "none":
+                rec.risk_flags = recovered
+                rec.field_sources["risk_flags"] = "garbled_recovery"
 
     # Corroboration voting: a value read identically from >=2 independent
     # sources outranks a single-source precedence pick that nothing else

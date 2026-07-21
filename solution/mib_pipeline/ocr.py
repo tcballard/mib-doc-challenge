@@ -46,19 +46,46 @@ def _ocr_once(page, dpi: int, psm: int) -> List[str]:
     return [s.strip() for s in text.splitlines() if s.strip()]
 
 
+WEAK_YIELD_WORDS = 30
+BINARIZE_THRESHOLD = 120
+
+
+def _ocr_binarized(page, dpi: int, psm: int) -> List[str]:
+    """OCR with hard black/white thresholding — recovers faint low-contrast
+    scans that plain OCR reads as noise."""
+    try:
+        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        img = img.point(lambda v: 255 if v > BINARIZE_THRESHOLD else 0)
+        text = pytesseract.image_to_string(
+            img, config=f"--oem 1 --psm {psm}", timeout=PAGE_TIMEOUT_S
+        )
+    except Exception:
+        return []
+    return [s.strip() for s in text.splitlines() if s.strip()]
+
+
 def ocr_page_lines(page) -> List[str]:
     """OCR a page with both segmentation passes and return the union of their
-    lines (deduplicated, pass order preserved). Falls back to a cheap low-DPI
-    pass only if both high-detail passes come back nearly empty."""
+    lines (deduplicated, pass order preserved). Weak-yield pages get an extra
+    binarized pass — faint scans often only become legible after hard
+    thresholding. Falls back to a cheap low-DPI pass if everything is empty."""
     if not _OCR_OK:
         return []
     lines: List[str] = []
     seen = set()
-    for dpi, psm in PASSES:
-        for ln in _ocr_once(page, dpi, psm):
+
+    def _absorb(new):
+        for ln in new:
             if ln not in seen:
                 seen.add(ln)
                 lines.append(ln)
+
+    for dpi, psm in PASSES:
+        _absorb(_ocr_once(page, dpi, psm))
+    if sum(len(l.split()) for l in lines) < WEAK_YIELD_WORDS:
+        _absorb(_ocr_binarized(page, 300, 4))
     if len(lines) < MIN_USEFUL_LINES:
         alt = _ocr_once(page, *FALLBACK)
         if len(alt) > len(lines):
