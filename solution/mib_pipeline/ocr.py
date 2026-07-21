@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover
 # degraded scans in this corpus. A hard per-page timeout is essential: on some
 # noisy pages Tesseract's component analysis blows up at high DPI and a single
 # page can otherwise grind for minutes.
-PRIMARY = (300, 6)
+PRIMARY = (300, 4)
 FALLBACK = (200, 4)
 PAGE_TIMEOUT_S = 12
 MIN_USEFUL_LINES = 3
