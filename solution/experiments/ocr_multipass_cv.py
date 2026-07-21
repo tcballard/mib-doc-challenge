@@ -1,6 +1,5 @@
 import csv, json, sys, time, io, random
 sys.path.insert(0, "solution")
-from pathlib import Path
 from collections import Counter
 import fitz, pytesseract
 from PIL import Image
@@ -13,13 +12,10 @@ cache = json.load(open("/tmp/parse_cache_v2.json"))
 def nz(s): return " ".join(str(s or "").strip().split()).casefold()
 FIELDS = ["applicant_name","species_code","home_world","visa_class","sponsor_id","arrival_date","declared_purpose"]
 
-cands = []
-for cid, rec in cache.items():
-    if not rec["ocr_used"]: continue
-    miss = sum(1 for f in FIELDS if nz(truth[cid][f]) != nz(rec[f]))
-    if miss >= 1: cands.append(cid)
+cands = [cid for cid, rec in cache.items() if rec["ocr_used"]
+         and sum(1 for f in FIELDS if nz(truth[cid][f]) != nz(rec[f])) >= 1]
 random.seed(7)
-sample = random.sample(sorted(cands), 60)
+sample = random.sample(sorted(cands), 48)
 
 CONFIGS = [("c200p4",200,4),("c300p4",300,4),("c300p6",300,6)]
 def make_fn(dpi, psm):
@@ -27,22 +23,29 @@ def make_fn(dpi, psm):
         mat = fitz.Matrix(dpi/72.0, dpi/72.0)
         pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
         img = Image.open(io.BytesIO(pix.tobytes("png")))
-        txt = pytesseract.image_to_string(img, config=f"--oem 1 --psm {psm}")
+        try:
+            txt = pytesseract.image_to_string(img, config=f"--oem 1 --psm {psm}", timeout=10)
+        except Exception:
+            return []
         return [s.strip() for s in txt.splitlines() if s.strip()]
     return fn
 
 def work(args):
     cid, name, dpi, psm = args
+    t0=time.time()
     rec = parse_packet(cid, extract_pages(f"data/train/{cid}.pdf", ocr_fn=make_fn(dpi,psm)))
-    return cid, name, {f: getattr(rec,f) for f in FIELDS}
+    return cid, name, {f: getattr(rec,f) for f in FIELDS}, time.time()-t0
 
 jobs = [(cid,n,d,p) for cid in sample for (n,d,p) in CONFIGS]
-out = {}
-t0=time.time()
+out = {}; times=Counter(); counts=Counter()
+t0=time.time(); done=0
 with mp.Pool(4) as pool:
-    for cid,name,vals in pool.imap_unordered(work, jobs, chunksize=4):
-        out.setdefault(cid,{})[name]=vals
+    for cid,name,vals,dt in pool.imap_unordered(work, jobs, chunksize=2):
+        out.setdefault(cid,{})[name]=vals; times[name]+=dt; counts[name]+=1
+        done+=1
+        if done%36==0: print(f"  {done}/{len(jobs)} at {time.time()-t0:.0f}s", flush=True)
 print(f"{len(jobs)} parses in {time.time()-t0:.0f}s")
+for n,_,_ in CONFIGS: print(f"  {n}: avg {times[n]/counts[n]:.2f}s/pdf")
 
 def acc_of(getval):
     a=t=0
@@ -51,22 +54,17 @@ def acc_of(getval):
             t+=1
             if nz(truth[cid][f])==nz(getval(cid,f)): a+=1
     return a,t
-
 for name,_,_ in CONFIGS:
-    a,t=acc_of(lambda cid,f: out[cid][name][f])
+    a,t=acc_of(lambda cid,f: out[cid][name].get(f,""))
     print(f"{name}: {a}/{t} = {a/t:.3f}")
-
-# strategy 1: fill gaps (200 base, others fill empties)
 def fill(cid,f):
     for name,_,_ in CONFIGS:
-        v=out[cid][name][f]
+        v=out[cid][name].get(f,"")
         if v: return v
     return ""
-a,t=acc_of(fill); print(f"fill-gaps: {a}/{t} = {a/t:.3f}")
-
-# strategy 2: majority vote on normalized values (ties -> config order)
+a,t=acc_of(fill); print(f"fill-gaps(200>300p4>300p6): {a}/{t} = {a/t:.3f}")
 def vote(cid,f):
-    vals=[out[cid][n][f] for n,_,_ in CONFIGS if out[cid][n][f]]
+    vals=[out[cid][n].get(f,"") for n,_,_ in CONFIGS if out[cid][n].get(f,"")]
     if not vals: return ""
     c=Counter(nz(v) for v in vals)
     best,cnt=c.most_common(1)[0]
