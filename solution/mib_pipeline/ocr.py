@@ -46,7 +46,7 @@ def _ocr_once(page, dpi: int, psm: int) -> List[str]:
     return [s.strip() for s in text.splitlines() if s.strip()]
 
 
-WEAK_YIELD_WORDS = 30
+WEAK_YIELD_WORDS = 60
 BINARIZE_THRESHOLD = 120
 
 

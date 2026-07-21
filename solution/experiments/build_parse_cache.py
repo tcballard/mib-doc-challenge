@@ -3,7 +3,7 @@
 
 Restart-safe: results append to a JSONL as they complete, and already-parsed
 case ids are skipped on relaunch. When all packets are present the consolidated
-dict is written to /tmp/parse_cache_v8.json.
+dict is written to /tmp/parse_cache_v9.json.
 """
 import sys, json, dataclasses, os
 from pathlib import Path
@@ -17,8 +17,8 @@ from mib_pipeline.parse import parse_packet
 from mib_pipeline.ocr import make_ocr_fn
 import multiprocessing as mp
 
-PARTIAL = Path("/tmp/parse_cache_v8.partial.jsonl")
-OUT = Path("/tmp/parse_cache_v8.json")
+PARTIAL = Path("/tmp/parse_cache_v9.partial.jsonl")
+OUT = Path("/tmp/parse_cache_v9.json")
 
 
 def work(path):

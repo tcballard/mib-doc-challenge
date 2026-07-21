@@ -517,6 +517,18 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 rec.risk_flags = recovered
                 rec.field_sources["risk_flags"] = "garbled_recovery"
 
+    # The adjudicator note's reason line often names the risk flag outright
+    # ("Disqualifying risk flag: planetary_embargo", "Review-only risk flag
+    # present: sponsor_mismatch") — trusted evidence for the flags field even
+    # when no biometric slip survives.
+    if rec.risk_flags in ("", "none") and rec.note and (rec.note.reason or rec.note.raw):
+        note_text = ((rec.note.reason or "") + " " + (rec.note.raw or "")).lower()
+        note_canon = re.sub(r"[\s_]+", "_", note_text)
+        note_flags = sorted({f for f in KNOWN_FLAGS if f in note_canon})
+        if note_flags:
+            rec.risk_flags = "|".join(note_flags)
+            rec.field_sources["risk_flags"] = "note_reason"
+
     # Corroboration voting: a value read identically from >=2 independent
     # sources outranks a single-source precedence pick that nothing else
     # confirms (OCR misreads rarely repeat verbatim across pages).
