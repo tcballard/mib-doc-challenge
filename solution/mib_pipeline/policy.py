@@ -93,11 +93,20 @@ def _conf(reason: str, default: float = 0.6) -> float:
 
 
 def _core_complete(rec: Record) -> bool:
+    """Complete enough to approve. Whitelist-recovered values are good enough
+    to *report* but are salvage from heavy noise — they don't count toward the
+    trusted-evidence bar that unlocks an approval."""
+    src = rec.field_sources or {}
+    def trusted(field, ok):
+        return ok and src.get(field) != "whitelist_ocr"
     visa_ok = (rec.visa_class or "").upper() in VALID_VISA
     return all([
-        bool(rec.applicant_name), bool(rec.species_code), bool(rec.home_world),
-        visa_ok, bool(re.match(r"SPN-\d{4}", rec.sponsor_id or "")),
-        _parse_date(rec.arrival_date) is not None,
+        bool(rec.applicant_name),
+        trusted("species_code", bool(rec.species_code)),
+        bool(rec.home_world),
+        visa_ok,
+        trusted("sponsor_id", bool(re.match(r"SPN-\d{4}", rec.sponsor_id or ""))),
+        trusted("arrival_date", _parse_date(rec.arrival_date) is not None),
     ])
 
 
