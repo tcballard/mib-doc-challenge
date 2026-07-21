@@ -70,10 +70,10 @@ keyed to specific PDFs. Staleness uses the batch's most recent arrival date as
 
 | Section | Score |
 | --- | --- |
-| Classification | 61.5 / 80 |
-| Field extraction | 40.2 / 50 |
+| Classification | 61.6 / 80 |
+| Field extraction | 40.3 / 50 |
 | Confidence calibration | 14.9 / 20 |
-| **Deterministic total** | **≈116.6 / 150** |
+| **Deterministic total** | **≈116.8 / 150** |
 | Catastrophic false approvals | 37 / 1000 |
 
 Training extraction is a *lower bound* on the graded score: many of its "misses"
