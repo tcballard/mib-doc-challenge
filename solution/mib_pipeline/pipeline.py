@@ -75,6 +75,12 @@ def parse_one(path: str, use_ocr: bool = True) -> Record:
     ocr_fn = make_ocr_fn() if (use_ocr and ocr_available()) else None
     pages = extract_pages(path, ocr_fn=ocr_fn)
     rec = parse_packet(case_id, pages)
+    if use_ocr and rec.ocr_used:
+        try:
+            from .recover import recover_missing_fields
+            recover_missing_fields(rec, path)
+        except Exception:
+            pass
     return rec
 
 
