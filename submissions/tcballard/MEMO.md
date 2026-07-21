@@ -70,67 +70,76 @@ keyed to specific PDFs. Staleness uses the batch's most recent arrival date as
 
 | Section | Score |
 | --- | --- |
-| Classification | 58.6 / 80 |
-| Field extraction | 38.9 / 50 |
-| Confidence calibration | 15.3 / 20 |
-| **Deterministic total** | **≈112.7 / 150** |
-| Catastrophic false approvals | 6 / 1000 |
+| Classification | 61.5 / 80 |
+| Field extraction | 40.2 / 50 |
+| Confidence calibration | 14.9 / 20 |
+| **Deterministic total** | **≈116.6 / 150** |
+| Catastrophic false approvals | 37 / 1000 |
 
 Training extraction is a *lower bound* on the graded score: many of its "misses"
 are damaged fields (`[DATE WASHED OUT]`, cut-out names) that the private labels
 mark unrecoverable and remove from the maximum.
 
-## 3. Deliberate tradeoff: conservatism over raw accuracy
+## 3. The pivotal diagnostic: extraction *is* classification
 
-A clean, complete, non‑diplomatic packet still has a ~25% hidden‑denial rate that
-**no visible field predicts** — the denial evidence is genuinely absent from the
-document (the manual is "incomplete by design"). Approving that bucket buys ~1
-extra classification point but produces ~40 catastrophic false approvals per
-1000. Since a false approval is the single costliest error (−4, and tie‑breaker
-#2), I route those packets to `NEEDS_REVIEW`. This trades ~0.5 deterministic
-points for a **7× reduction in catastrophic false approvals** (43 → 6) and
-better calibration, and — most importantly — it is robust to distribution shift
-on the private test: the system cannot mass‑approve packets it cannot justify.
+Running the finished policy on **perfect fields** (the truth CSV) scores 66+/80
+with near-perfect denial recall — so the denials that once looked "hidden" were
+really extraction failures feeding the rules wrong values. That reframed the
+whole project: every subsequent point came from reading documents better
+(recovering risk flags from degraded slips, deskewing rotated scans), not from a
+smarter classifier. A per-field sensitivity analysis (swap one extracted field
+at a time for truth) showed `risk_flags` alone gates ~7 of the ~11 reachable
+classification points, which is where the OCR effort was aimed.
+
+Decision routing is expected-value-optimal against the scoring matrix, measured
+per decision path: clean-and-complete packets approve; ambiguous signals
+(transit purpose, stale-looking dates on OCR'd packets, salvaged-field-only
+completeness) route to review. Whitelist-salvaged values are reported for
+extraction but deliberately do not count toward the trusted-evidence bar that
+unlocks an approval.
 
 ## 4. Failure modes
 
-- **Underdetermined denials.** The dominant residual error is `DENIED` cases with
-  no visible disqualifier; these become `NEEDS_REVIEW`. Irreducible without the
-  admin-only labels.
-- **Illegible biometric slips.** When the biometric slip is a degraded scan, OCR
-  cannot always read `Observed flags`, so `illegible_biometrics` is sometimes
-  missed — ironically the very illegibility that defines the flag.
-- **Risk flags without a biometric page.** ~2/3 of risk‑flag misses are packets
-  with no biometric slip at all; the flag isn't visibly evidenced.
+- **Flags with no surviving evidence.** The remaining risk-flag misses have no
+  biometric slip, no note mention, no stamp — verified by rendering and
+  red-ink-isolated OCR of every such packet. This matches the challenge's
+  documented `unrecoverable_fields` design.
+- **Illegible biometric slips.** Heavy-noise recovery reads flags through
+  ~50% character corruption, but some slips are beyond any threshold.
 - **Learned-list generalization.** Embargo/revoked lists come from training; a
   private test that introduces new embargoed worlds without an adjudicator note
-  would slip through. The note path (which states the reason in‑document) is the
-  generalizable backstop.
+  would slip through. The note path and the registry "EMBARGO REVIEW" status
+  (both stated in-document) are the generalizable backstops.
+- **Catastrophic false approvals** run ~37/1000 on train — the price of
+  EV-optimal approval on a bucket with residual label noise; each is a case
+  whose denial evidence is absent from the packet.
 
 ## 5. Experiments run (and what they showed)
 
-1. **ML on the residual — negative result, kept out of the pipeline.** A
-   cross‑validated gradient‑boosted / logistic model over generalizable features,
-   with decision‑theoretic label choice, was tested against the rule engine on
-   the ambiguous cases. It reached higher raw accuracy but a *lower* challenge
-   score (66.8–69.1 vs 71.4 cls+cal) with 6–10× more catastrophic false
-   approvals: the residual denials are irreducible noise given visible evidence,
-   so "uncertain → review" is already score‑optimal. Reproducible in
-   `solution/experiments/residual_model_cv.py`; writeup in
-   `solution/experiments/FINDINGS.md`.
-2. **Multi‑pass OCR — positive, shipped.** Naive always‑multi‑DPI merging is a
-   tail‑latency trap (Tesseract can grind minutes on noisy pages at high DPI),
-   but a bounded union of two 300 dpi segmentation passes with hard timeouts
-   gained ~+6 points total (extraction +4, classification +2) over the original
-   single 200 dpi pass.
+1. **ML on the residual — negative, kept out.** Cross-validated GBT/logistic
+   models with decision-theoretic label choice score *below* the rule engine
+   (66.8–69.1 vs 71.4 cls+cal) with 6–10× the catastrophic false approvals.
+   Reproducible in `solution/experiments/residual_model_cv.py`.
+2. **Multi-pass OCR — positive, shipped.** A bounded union of two 300 dpi
+   segmentation passes (PSM 6 for notes, PSM 4 for field lines) with hard
+   per-page timeouts, plus a binarized pass on weak-yield pages, plus deskew.
+   Naive always-multi-DPI merging is a tail-latency trap — Tesseract can grind
+   minutes on noisy pages at high DPI.
+3. **Visual stamp detection — negative, documented.** No denial stamps exist in
+   the corpus; red ink on the relevant packets reads FILED/COPY/MIB (decoys).
+   Swept via vector inspection, pixel statistics, and red-channel OCR.
+4. **Barcodes — negative.** No decodable barcodes exist; "BARCODE PAYLOAD"
+   strings are text-layer traps (correctly ignored as instructions).
 
 ## 6. What I'd do with another week
 
-1. **Tesseract C API (`tesserocr`)** instead of subprocess-per-page, freeing
-   budget for more OCR passes and image preprocessing (deskew/denoise/adaptive
-   thresholding) on the worst scans.
-2. **Visual stamp/mark detection** (classical CV on rendered pages) for evidence
-   that OCR can't read as text — e.g. crossed-out denial stamps.
+1. **Tesseract C API (`tesserocr`)** instead of subprocess-per-page (~35%
+   runtime), reinvested in more preprocessing variants (multiple binarization
+   thresholds, adaptive thresholding) — different thresholds unlock different
+   degraded pages.
+2. **Label-anchored region re-OCR**: locate a field's label via word bounding
+   boxes, crop the value region, upscale, single-line whitelist OCR — the
+   precision version of the current whole-page whitelist salvage.
 3. **Confidence via held‑out calibration** (isotonic regression on an
    out‑of‑fold split) rather than in‑sample bucket accuracy, to derisk the mild
    optimism of calibrating on the same data the rules were tuned on.
