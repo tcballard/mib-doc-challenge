@@ -66,9 +66,9 @@ VALID_VISA = {"XW-1", "XW-2", "DIP-1", "MED-3", "TRANSIT-7"}
 # path achieves on the training labels (see scripts/calibrate.py). Setting
 # confidence to a bucket's hit-rate minimizes Brier error.
 REASON_CONFIDENCE = {
-    "adjudicator_note": 0.97,
+    "adjudicator_note": 0.98,
     "no_trusted_evidence": 0.50,
-    "disqualifying_flag": 0.95,
+    "disqualifying_flag": 0.98,
     "transit_class": 0.91,
     "transit_purpose": 0.35,
     "embargo_world": 0.76,
@@ -79,7 +79,7 @@ REASON_CONFIDENCE = {
     "fee_unknown": 0.95,
     "missing_arrival_date": 0.39,
     "review_flag": 0.95,
-    "identity_conflict": 0.44,
+    "identity_conflict": 0.38,
     "unsupported_waiver": 0.50,
     "incomplete_evidence": 0.32,
     "clean_approved": 0.62,
