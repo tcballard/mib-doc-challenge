@@ -75,6 +75,19 @@ def parse_one(path: str, use_ocr: bool = True) -> Record:
     ocr_fn = make_ocr_fn() if (use_ocr and ocr_available()) else None
     pages = extract_pages(path, ocr_fn=ocr_fn)
     rec = parse_packet(case_id, pages)
+
+    # Escalation layer ("onion" architecture): the cheap layers handle most
+    # packets in well under budget; packets they leave deficient get a second,
+    # much heavier OCR sweep, and the two parses merge field-wise.
+    if use_ocr and rec.ocr_used and _deficiency(rec) >= 3:
+        try:
+            from .ocr import make_escalated_ocr_fn
+            pages2 = extract_pages(path, ocr_fn=make_escalated_ocr_fn())
+            rec2 = parse_packet(case_id, pages2)
+            rec = _merge_records(rec, rec2)
+        except Exception:
+            pass
+
     if use_ocr and rec.ocr_used:
         try:
             from .recover import recover_missing_fields
@@ -82,6 +95,41 @@ def parse_one(path: str, use_ocr: bool = True) -> Record:
         except Exception:
             pass
     return rec
+
+
+CORE_FIELDS = ("applicant_name", "species_code", "home_world", "visa_class",
+               "sponsor_id", "arrival_date", "declared_purpose")
+
+
+def _deficiency(rec: Record) -> int:
+    """How much trusted evidence is still missing after the cheap layers."""
+    score = sum(1 for f in CORE_FIELDS if not getattr(rec, f))
+    if (rec.risk_flags or "none") == "none" and "biometric" not in rec.present_pages:
+        score += 1
+    if not rec.fee_observed:
+        score += 1
+    if rec.note and not rec.note.finding and rec.note.raw:
+        score += 1  # a note exists but its finding didn't parse
+    return score
+
+
+def _merge_records(a: Record, b: Record) -> Record:
+    """Merge an escalated re-parse into the base record: fill gaps, and accept
+    the escalated reading for evidence-bearing values the base pass lacked."""
+    for f in CORE_FIELDS + ("waiver_code", "registry_status"):
+        if not getattr(a, f) and getattr(b, f):
+            setattr(a, f, getattr(b, f))
+            a.field_sources[f] = "escalation"
+    if (a.risk_flags or "none") == "none" and (b.risk_flags or "none") != "none":
+        a.risk_flags = b.risk_flags
+        a.field_sources["risk_flags"] = "escalation"
+    if not a.fee_observed and b.fee_observed:
+        a.fee_status, a.fee_observed = b.fee_status, True
+    if (not a.note or not a.note.finding) and (b.note and b.note.finding):
+        a.note = b.note
+    a.present_pages = sorted(set(a.present_pages) | set(b.present_pages))
+    a.identity_conflict = a.identity_conflict or b.identity_conflict
+    return a
 
 
 def _worker(path):

@@ -124,3 +124,49 @@ def make_ocr_fn():
     def _fn(page):
         return ocr_page_lines(page)
     return _fn
+
+
+# --- Escalation layer -------------------------------------------------------
+# For packets still deficient after the standard passes, spend more budget:
+# extra binarization thresholds (different scans respond to different cutoffs),
+# autocontrast, and a higher-DPI pass. Bounded per page by the same timeout.
+
+ESCALATION_THRESHOLDS = (100, 140)
+
+
+def _ocr_variant(page, dpi: int, psm: int, threshold=None, autocontrast=False) -> List[str]:
+    try:
+        img = _render(page, dpi)
+        if autocontrast:
+            from PIL import ImageOps
+            img = ImageOps.autocontrast(img, cutoff=2)
+        if threshold is not None:
+            img = img.point(lambda v: 255 if v > threshold else 0)
+        text = pytesseract.image_to_string(
+            img, config=f"--oem 1 --psm {psm}", timeout=PAGE_TIMEOUT_S
+        )
+    except Exception:
+        return []
+    return [s.strip() for s in text.splitlines() if s.strip()]
+
+
+def make_escalated_ocr_fn():
+    """OCR function for the escalation pass: the standard union plus extra
+    preprocessing variants. Used only on packets the cheap layers left
+    deficient, so its cost stays bounded."""
+    def _fn(page):
+        lines: List[str] = []
+        seen = set()
+
+        def absorb(new):
+            for ln in new:
+                if ln not in seen:
+                    seen.add(ln)
+                    lines.append(ln)
+
+        absorb(ocr_page_lines(page))
+        for th in ESCALATION_THRESHOLDS:
+            absorb(_ocr_variant(page, 300, 4, threshold=th))
+        absorb(_ocr_variant(page, 300, 4, autocontrast=True))
+        return lines
+    return _fn
