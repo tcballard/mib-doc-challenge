@@ -17,11 +17,13 @@ try:
 except Exception:  # pragma: no cover
     _OCR_OK = False
 
-# Primary pass: 300 dpi / PSM 6 measurably out-reads 200 dpi / PSM 4 on the
-# degraded scans in this corpus. A hard per-page timeout is essential: on some
-# noisy pages Tesseract's component analysis blows up at high DPI and a single
-# page can otherwise grind for minutes.
-PRIMARY = (300, 4)
+# Two complementary passes at 300 dpi: PSM 6 (block mode) reads adjudicator
+# notes and dense paragraphs better, PSM 4 (column mode) reads labeled field
+# lines better. The parser consumes the union of lines and cherry-picks
+# whichever pass rendered each line legibly. A hard per-page timeout is
+# essential: on some noisy pages Tesseract's component analysis blows up at
+# high DPI and a single page can otherwise grind for minutes.
+PASSES = [(300, 6), (300, 4)]
 FALLBACK = (200, 4)
 PAGE_TIMEOUT_S = 12
 MIN_USEFUL_LINES = 3
@@ -45,11 +47,18 @@ def _ocr_once(page, dpi: int, psm: int) -> List[str]:
 
 
 def ocr_page_lines(page) -> List[str]:
-    """OCR a page: high-detail primary pass, cheap fallback if it comes back
-    nearly empty (timeout, blow-up, or unreadable at that setting)."""
+    """OCR a page with both segmentation passes and return the union of their
+    lines (deduplicated, pass order preserved). Falls back to a cheap low-DPI
+    pass only if both high-detail passes come back nearly empty."""
     if not _OCR_OK:
         return []
-    lines = _ocr_once(page, *PRIMARY)
+    lines: List[str] = []
+    seen = set()
+    for dpi, psm in PASSES:
+        for ln in _ocr_once(page, dpi, psm):
+            if ln not in seen:
+                seen.add(ln)
+                lines.append(ln)
     if len(lines) < MIN_USEFUL_LINES:
         alt = _ocr_once(page, *FALLBACK)
         if len(alt) > len(lines):
