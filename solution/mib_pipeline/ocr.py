@@ -33,11 +33,40 @@ def ocr_available() -> bool:
     return _OCR_OK
 
 
+def _estimate_skew(img) -> float:
+    """Estimate page skew by maximizing dark-pixel row-profile variance over
+    candidate angles (cheap, runs on a small thumbnail)."""
+    try:
+        import numpy as np
+    except Exception:
+        return 0.0
+    thumb = img.resize((img.width // 4 or 1, img.height // 4 or 1))
+    best_angle, best_score = 0.0, -1.0
+    for angle in (-12, -9, -6, -4, -2, 0, 2, 4, 6, 9, 12):
+        rot = thumb.rotate(angle, expand=False, fillcolor=255)
+        arr = np.asarray(rot, dtype=np.uint8)
+        dark = (arr < 128).sum(axis=1).astype(float)
+        score = dark.var()
+        if score > best_score:
+            best_score, best_angle = score, angle
+    return float(best_angle)
+
+
+def _render(page, dpi: int):
+    mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
+    img = Image.open(io.BytesIO(pix.tobytes("png")))
+    # Deskew: rotated scans degrade Tesseract sharply; straighten when the
+    # estimated skew is meaningful.
+    angle = _estimate_skew(img)
+    if abs(angle) >= 2:
+        img = img.rotate(angle, expand=True, fillcolor=255)
+    return img
+
+
 def _ocr_once(page, dpi: int, psm: int) -> List[str]:
     try:
-        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        img = _render(page, dpi)
         text = pytesseract.image_to_string(
             img, config=f"--oem 1 --psm {psm}", timeout=PAGE_TIMEOUT_S
         )
@@ -54,9 +83,7 @@ def _ocr_binarized(page, dpi: int, psm: int) -> List[str]:
     """OCR with hard black/white thresholding — recovers faint low-contrast
     scans that plain OCR reads as noise."""
     try:
-        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        img = _render(page, dpi)
         img = img.point(lambda v: 255 if v > BINARIZE_THRESHOLD else 0)
         text = pytesseract.image_to_string(
             img, config=f"--oem 1 --psm {psm}", timeout=PAGE_TIMEOUT_S

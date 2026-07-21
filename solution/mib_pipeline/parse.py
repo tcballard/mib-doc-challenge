@@ -535,6 +535,18 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     def _nzv(s):
         return " ".join((s or "").split()).casefold()
 
+    def _char_majority(variants: List[str]) -> str:
+        """Per-character majority across equal-length readings of the same
+        value — fixes OCR noise when every reading is slightly wrong but each
+        character position has a majority."""
+        if len(variants) < 2:
+            return variants[0] if variants else ""
+        length = Counter(len(v) for v in variants).most_common(1)[0][0]
+        same = [v for v in variants if len(v) == length]
+        if len(same) < 2:
+            return max(variants, key=variants.count)
+        return "".join(Counter(v[i] for v in same).most_common(1)[0][0] for i in range(length))
+
     def _corroborate(fld, cands):
         cands = [c for c in cands if c and not _is_damage(c)]
         cur = getattr(rec, fld)
@@ -549,6 +561,17 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                     rec.field_sources[fld] = "corroboration"
                     setattr(rec, fld, c)
                     return
+        # No repeated reading: if several near-identical variants disagree only
+        # at the character level, take the per-character majority.
+        if best_n == 1 and len(cands) >= 2:
+            from .vocab import _canon, _edit_distance
+            near = [c for c in cands
+                    if _edit_distance(_canon(c), _canon(cur), cap=3) <= max(1, len(_canon(cur)) // 4)]
+            if len(near) >= 2:
+                merged = _char_majority(near)
+                if merged and _nzv(merged) != _nzv(cur):
+                    rec.field_sources[fld] = "char_majority"
+                    setattr(rec, fld, merged)
 
     _corroborate("applicant_name", [intake.get("applicant_name"), registry.get("applicant_name"),
                                     biometric.get("Applicant"), rec.sponsor_letter_name])
