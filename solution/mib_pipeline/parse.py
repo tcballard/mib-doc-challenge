@@ -617,6 +617,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 "arrival_date", "declared_purpose"):
         if _is_damage(getattr(rec, fld)):
             setattr(rec, fld, "")
+            rec.field_sources[fld] = "damaged"
 
     # Sponsor: intake form primary, sponsor letter as fallback. Only accept a
     # value that actually matches the SPN-#### pattern (guards against watermark

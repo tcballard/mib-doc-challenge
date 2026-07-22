@@ -150,23 +150,71 @@ def _ocr_variant(page, dpi: int, psm: int, threshold=None, autocontrast=False) -
     return [s.strip() for s in text.splitlines() if s.strip()]
 
 
+def _fix_orientation(img):
+    """Detect and undo 90/180/270-degree scan orientation via Tesseract OSD."""
+    try:
+        osd = pytesseract.image_to_osd(img, timeout=8)
+        for line in osd.splitlines():
+            if line.startswith("Rotate:"):
+                rot = int(line.split(":")[1])
+                if rot:
+                    return img.rotate(-rot, expand=True, fillcolor=255)
+    except Exception:
+        pass
+    return img
+
+
+def _escalation_variants(page):
+    """Ordered ladder of increasingly aggressive read attempts for a page the
+    cheap layers couldn't crack. Yields line-lists."""
+    from PIL import ImageOps, ImageFilter
+    try:
+        base = _render(page, 300)
+    except Exception:
+        return
+    base = _fix_orientation(base)
+
+    def run(img, psm):
+        try:
+            text = pytesseract.image_to_string(
+                img, config=f"--oem 1 --psm {psm}", timeout=PAGE_TIMEOUT_S)
+            return [s.strip() for s in text.splitlines() if s.strip()]
+        except Exception:
+            return []
+
+    yield run(base, 4)
+    yield run(base, 6)
+    for th in ESCALATION_THRESHOLDS:
+        yield run(base.point(lambda v, t=th: 255 if v > t else 0), 4)
+    yield run(ImageOps.autocontrast(base, cutoff=2), 4)
+    # Sparse-text mode: recovers free-floating words when layout analysis fails.
+    yield run(base, 11)
+    # Denoise then binarize: beats salt-and-pepper speckle.
+    den = base.filter(ImageFilter.MedianFilter(3))
+    yield run(ImageOps.autocontrast(den, cutoff=2).point(lambda v: 255 if v > 130 else 0), 4)
+    # Upscale for small/blurry type.
+    up = base.resize((base.width * 2, base.height * 2))
+    yield run(up.point(lambda v: 255 if v > BINARIZE_THRESHOLD else 0), 6)
+
+
 def make_escalated_ocr_fn():
-    """OCR function for the escalation pass: the standard union plus extra
-    preprocessing variants. Used only on packets the cheap layers left
-    deficient, so its cost stays bounded."""
+    """OCR function for the escalation pass: works down a ladder of variants,
+    stopping once two consecutive variants contribute nothing new — spend the
+    time a page deserves, and no more."""
     def _fn(page):
         lines: List[str] = []
         seen = set()
-
-        def absorb(new):
-            for ln in new:
-                if ln not in seen:
+        dry = 0
+        for variant_lines in _escalation_variants(page):
+            new = [ln for ln in variant_lines if ln not in seen]
+            if new:
+                dry = 0
+                for ln in new:
                     seen.add(ln)
                     lines.append(ln)
-
-        absorb(ocr_page_lines(page))
-        for th in ESCALATION_THRESHOLDS:
-            absorb(_ocr_variant(page, 300, 4, threshold=th))
-        absorb(_ocr_variant(page, 300, 4, autocontrast=True))
+            else:
+                dry += 1
+                if dry >= 2 and lines:
+                    break
         return lines
     return _fn

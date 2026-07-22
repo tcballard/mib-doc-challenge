@@ -102,8 +102,12 @@ CORE_FIELDS = ("applicant_name", "species_code", "home_world", "visa_class",
 
 
 def _deficiency(rec: Record) -> int:
-    """How much trusted evidence is still missing after the cheap layers."""
-    score = sum(1 for f in CORE_FIELDS if not getattr(rec, f))
+    """How much trusted evidence is still missing after the cheap layers.
+    Damage-marked fields don't count: their evidence is destroyed, and no
+    amount of OCR escalation can recover what isn't on the page."""
+    src = rec.field_sources or {}
+    score = sum(1 for f in CORE_FIELDS
+                if not getattr(rec, f) and src.get(f) != "damaged")
     if (rec.risk_flags or "none") == "none" and "biometric" not in rec.present_pages:
         score += 1
     if not rec.fee_observed:
