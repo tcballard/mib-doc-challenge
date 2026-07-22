@@ -66,16 +66,28 @@ def _render(page, dpi: int, orient: int = 0):
     return img
 
 
+MIN_OSD_CONFIDENCE = 2.0
+
+
 def _detect_orientation(page) -> int:
     """OSD quadrant-rotation detection on a cheap low-DPI render. Returns the
-    clockwise degrees the content must be rotated back by (0/90/180/270)."""
+    clockwise degrees the content must be rotated back by (0/90/180/270).
+
+    Only acted on when OSD's own confidence clears a floor — low-confidence
+    detections on noisy upright pages otherwise rotate good pages into bad
+    ones (measured as a small across-the-board extraction dip)."""
     try:
         pix = page.get_pixmap(matrix=fitz.Matrix(150 / 72.0, 150 / 72.0), colorspace=fitz.csGRAY)
         img = Image.open(io.BytesIO(pix.tobytes("png")))
         osd = pytesseract.image_to_osd(img, timeout=8)
+        rot, conf = 0, 0.0
         for line in osd.splitlines():
             if line.startswith("Rotate:"):
-                return int(line.split(":")[1])
+                rot = int(line.split(":")[1])
+            elif line.startswith("Orientation confidence:"):
+                conf = float(line.split(":")[1])
+        if rot and conf >= MIN_OSD_CONFIDENCE:
+            return rot
     except Exception:
         pass
     return 0
