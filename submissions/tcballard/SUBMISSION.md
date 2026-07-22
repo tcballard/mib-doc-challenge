@@ -24,7 +24,7 @@ docker run --rm --network none \
 ## Runtime
 
 - Offline OCR (`tesseract-ocr`) + PyMuPDF; no API keys or external services.
-- Parallelized across CPU cores; ~0.25s per PDF on 4 vCPU, well within the
+- Parallelized across CPU cores; measured 4.1s per PDF end-to-end on 4 vCPU (200-packet cold-start sample), within the
   6s/PDF budget.
 - Image size and model-artifact limits are satisfied (no large model artifacts;
   the pipeline is rules + Tesseract).
