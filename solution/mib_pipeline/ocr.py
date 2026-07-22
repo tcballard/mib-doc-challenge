@@ -52,21 +52,38 @@ def _estimate_skew(img) -> float:
     return float(best_angle)
 
 
-def _render(page, dpi: int):
+def _render(page, dpi: int, orient: int = 0):
     mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
     pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
     img = Image.open(io.BytesIO(pix.tobytes("png")))
-    # Deskew: rotated scans degrade Tesseract sharply; straighten when the
-    # estimated skew is meaningful.
+    # Quadrant orientation first (15% of scanned pages in this corpus are
+    # rotated 90/180/270 and defeat every downstream pass), then fine deskew.
+    if orient:
+        img = img.rotate(-orient, expand=True, fillcolor=255)
     angle = _estimate_skew(img)
     if abs(angle) >= 2:
         img = img.rotate(angle, expand=True, fillcolor=255)
     return img
 
 
-def _ocr_once(page, dpi: int, psm: int) -> List[str]:
+def _detect_orientation(page) -> int:
+    """OSD quadrant-rotation detection on a cheap low-DPI render. Returns the
+    clockwise degrees the content must be rotated back by (0/90/180/270)."""
     try:
-        img = _render(page, dpi)
+        pix = page.get_pixmap(matrix=fitz.Matrix(150 / 72.0, 150 / 72.0), colorspace=fitz.csGRAY)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        osd = pytesseract.image_to_osd(img, timeout=8)
+        for line in osd.splitlines():
+            if line.startswith("Rotate:"):
+                return int(line.split(":")[1])
+    except Exception:
+        pass
+    return 0
+
+
+def _ocr_once(page, dpi: int, psm: int, orient: int = 0) -> List[str]:
+    try:
+        img = _render(page, dpi, orient=orient)
         text = pytesseract.image_to_string(
             img, config=f"--oem 1 --psm {psm}", timeout=PAGE_TIMEOUT_S
         )
@@ -79,11 +96,11 @@ WEAK_YIELD_WORDS = 60
 BINARIZE_THRESHOLD = 120
 
 
-def _ocr_binarized(page, dpi: int, psm: int) -> List[str]:
+def _ocr_binarized(page, dpi: int, psm: int, orient: int = 0) -> List[str]:
     """OCR with hard black/white thresholding — recovers faint low-contrast
     scans that plain OCR reads as noise."""
     try:
-        img = _render(page, dpi)
+        img = _render(page, dpi, orient=orient)
         img = img.point(lambda v: 255 if v > BINARIZE_THRESHOLD else 0)
         text = pytesseract.image_to_string(
             img, config=f"--oem 1 --psm {psm}", timeout=PAGE_TIMEOUT_S
@@ -93,13 +110,29 @@ def _ocr_binarized(page, dpi: int, psm: int) -> List[str]:
     return [s.strip() for s in text.splitlines() if s.strip()]
 
 
+import re as _re
+
+_LEGIBLE_PATTERNS = _re.compile(
+    r"SPN-\d|MIB-\d|\d{4}-\d{2}-\d{2}|XW-[12]|DIP-1|MED-3|TRANSIT-7|"
+    r"Case ID|Applicant|Species|Home World|Fee Status|Observed|Finding|Sponsor",
+    _re.I,
+)
+
+
+def _legibility(lines: List[str]) -> int:
+    """Count of lines carrying a recognizable typed pattern or field label —
+    a quality gate; raw word counts pass confident garbage."""
+    return sum(1 for ln in lines if _LEGIBLE_PATTERNS.search(ln))
+
+
 def ocr_page_lines(page) -> List[str]:
-    """OCR a page with both segmentation passes and return the union of their
-    lines (deduplicated, pass order preserved). Weak-yield pages get an extra
-    binarized pass — faint scans often only become legible after hard
-    thresholding. Falls back to a cheap low-DPI pass if everything is empty."""
+    """OCR a page: quadrant-orientation detection first (cheap; 15% of scanned
+    pages are rotated and defeat everything downstream), then both segmentation
+    passes, then a binarized pass when yield is weak in *quantity or quality*.
+    Falls back to a cheap low-DPI pass if everything is empty."""
     if not _OCR_OK:
         return []
+    orient = _detect_orientation(page)
     lines: List[str] = []
     seen = set()
 
@@ -110,11 +143,12 @@ def ocr_page_lines(page) -> List[str]:
                 lines.append(ln)
 
     for dpi, psm in PASSES:
-        _absorb(_ocr_once(page, dpi, psm))
-    if sum(len(l.split()) for l in lines) < WEAK_YIELD_WORDS:
-        _absorb(_ocr_binarized(page, 300, 4))
+        _absorb(_ocr_once(page, dpi, psm, orient=orient))
+    if (sum(len(l.split()) for l in lines) < WEAK_YIELD_WORDS
+            or _legibility(lines) < 3):
+        _absorb(_ocr_binarized(page, 300, 4, orient=orient))
     if len(lines) < MIN_USEFUL_LINES:
-        alt = _ocr_once(page, *FALLBACK)
+        alt = _ocr_once(page, *FALLBACK, orient=orient)
         if len(alt) > len(lines):
             return alt
     return lines
@@ -150,29 +184,16 @@ def _ocr_variant(page, dpi: int, psm: int, threshold=None, autocontrast=False) -
     return [s.strip() for s in text.splitlines() if s.strip()]
 
 
-def _fix_orientation(img):
-    """Detect and undo 90/180/270-degree scan orientation via Tesseract OSD."""
-    try:
-        osd = pytesseract.image_to_osd(img, timeout=8)
-        for line in osd.splitlines():
-            if line.startswith("Rotate:"):
-                rot = int(line.split(":")[1])
-                if rot:
-                    return img.rotate(-rot, expand=True, fillcolor=255)
-    except Exception:
-        pass
-    return img
-
-
 def _escalation_variants(page):
     """Ordered ladder of increasingly aggressive read attempts for a page the
-    cheap layers couldn't crack. Yields line-lists."""
+    cheap layers couldn't crack. Yields (family, line-list) so the stopping
+    rule can distinguish technique families."""
     from PIL import ImageOps, ImageFilter
+    orient = _detect_orientation(page)
     try:
-        base = _render(page, 300)
+        base = _render(page, 300, orient=orient)
     except Exception:
         return
-    base = _fix_orientation(base)
 
     def run(img, psm):
         try:
@@ -182,39 +203,53 @@ def _escalation_variants(page):
         except Exception:
             return []
 
-    yield run(base, 4)
-    yield run(base, 6)
+    yield "segment", run(base, 4)
+    yield "segment", run(base, 6)
     for th in ESCALATION_THRESHOLDS:
-        yield run(base.point(lambda v, t=th: 255 if v > t else 0), 4)
-    yield run(ImageOps.autocontrast(base, cutoff=2), 4)
+        yield "threshold", run(base.point(lambda v, t=th: 255 if v > t else 0), 4)
+    yield "contrast", run(ImageOps.autocontrast(base, cutoff=2), 4)
     # Sparse-text mode: recovers free-floating words when layout analysis fails.
-    yield run(base, 11)
+    yield "sparse", run(base, 11)
     # Denoise then binarize: beats salt-and-pepper speckle.
     den = base.filter(ImageFilter.MedianFilter(3))
-    yield run(ImageOps.autocontrast(den, cutoff=2).point(lambda v: 255 if v > 130 else 0), 4)
+    yield "denoise", run(ImageOps.autocontrast(den, cutoff=2).point(lambda v: 255 if v > 130 else 0), 4)
     # Upscale for small/blurry type.
     up = base.resize((base.width * 2, base.height * 2))
-    yield run(up.point(lambda v: 255 if v > BINARIZE_THRESHOLD else 0), 6)
+    yield "upscale", run(up.point(lambda v: 255 if v > BINARIZE_THRESHOLD else 0), 6)
+
+
+PACKET_ESCALATION_BUDGET_S = 75.0
 
 
 def make_escalated_ocr_fn():
     """OCR function for the escalation pass: works down a ladder of variants,
-    stopping once two consecutive variants contribute nothing new — spend the
-    time a page deserves, and no more."""
+    stopping once two consecutive rungs *from different technique families*
+    contribute nothing new (adjacent same-family rungs are often redundant with
+    each other, not evidence the page is exhausted). A shared per-packet
+    deadline bounds the worst case: past it, remaining pages get no escalation
+    and the packet ships as a low-confidence review rather than a blown budget.
+    """
+    import time
+    start = time.monotonic()
+
     def _fn(page):
+        if time.monotonic() - start > PACKET_ESCALATION_BUDGET_S:
+            return ocr_page_lines(page)
         lines: List[str] = []
         seen = set()
-        dry = 0
-        for variant_lines in _escalation_variants(page):
+        dry_families: List[str] = []
+        for family, variant_lines in _escalation_variants(page):
             new = [ln for ln in variant_lines if ln not in seen]
             if new:
-                dry = 0
+                dry_families = []
                 for ln in new:
                     seen.add(ln)
                     lines.append(ln)
             else:
-                dry += 1
-                if dry >= 2 and lines:
+                dry_families.append(family)
+                if len(set(dry_families)) >= 2 and lines:
                     break
+            if time.monotonic() - start > PACKET_ESCALATION_BUDGET_S:
+                break
         return lines
     return _fn

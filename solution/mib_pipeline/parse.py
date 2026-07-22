@@ -61,6 +61,14 @@ DAMAGE_WORDS = re.compile(
     r"corrupt|registry\s*lost|missing)\b", re.I
 )
 
+# Injection payloads can enter via OCR too (tiny printed text on a scanned
+# page is legible at 300 dpi). The field manual classifies fake answer keys and
+# embedded instructions as untrusted regardless of visibility, so lines bearing
+# their signatures are excluded from field extraction.
+INJECTION_RE = re.compile(
+    r"system\s*:|answer\s*key|ignore\s+(all|visible|previous)|"
+    r"force\s+adjudication|output\s+this|barcode\s+payload", re.I)
+
 KNOWN_FLAGS = [
     "memory_tampering", "planetary_embargo", "active_warrant", "biohazard_red",
     "identity_conflict", "sponsor_mismatch", "illegible_biometrics", "rescinded_denial",
@@ -395,7 +403,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     meaningful_visible = False
 
     for p in use_pages:
-        vis = p.visible_lines
+        vis = [ln for ln in p.visible_lines if not INJECTION_RE.search(ln)]
         title = p.title or ""
         text = "\n".join(vis)
         for t in vis:

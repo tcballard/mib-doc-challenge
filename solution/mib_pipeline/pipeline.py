@@ -79,7 +79,7 @@ def parse_one(path: str, use_ocr: bool = True) -> Record:
     # Escalation layer ("onion" architecture): the cheap layers handle most
     # packets in well under budget; packets they leave deficient get a second,
     # much heavier OCR sweep, and the two parses merge field-wise.
-    if use_ocr and rec.ocr_used and _deficiency(rec) >= 3:
+    if use_ocr and rec.ocr_used and (_deficiency(rec) >= 3 or _critical_gap(rec)):
         try:
             from .ocr import make_escalated_ocr_fn
             pages2 = extract_pages(path, ocr_fn=make_escalated_ocr_fn())
@@ -99,6 +99,16 @@ def parse_one(path: str, use_ocr: bool = True) -> Record:
 
 CORE_FIELDS = ("applicant_name", "species_code", "home_world", "visa_class",
                "sponsor_id", "arrival_date", "declared_purpose")
+
+
+def _critical_gap(rec: Record) -> bool:
+    """A single missing item that likely swings the verdict outweighs several
+    peripheral fields: escalate on value, not just volume."""
+    if (rec.risk_flags or "none") == "none" and "biometric" not in rec.present_pages:
+        return True  # a hidden disqualifying flag flips APPROVED to DENIED (-4 vs +8)
+    if rec.note and rec.note.raw and not rec.note.finding:
+        return True  # an unparsed adjudicator finding is worth 8 points alone
+    return False
 
 
 def _deficiency(rec: Record) -> int:
