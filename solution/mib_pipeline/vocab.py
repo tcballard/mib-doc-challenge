@@ -81,9 +81,19 @@ def correct(value: str, vocabulary: Iterable[str], max_ratio: float = 0.34) -> O
     return scored[0][1]
 
 
-def correct_field(field: str, value: str) -> str:
+# Worlds under embargo: fuzzy-mapping a NEW world name onto one of these flips
+# an innocent applicant to DENIED, so mapping onto them demands near-certainty.
+_EMBARGO_CANON = {"wolf1061c", "trappist1e", "erisrelay"}
+
+
+def correct_field(field: str, value: str, strict: bool = False) -> str:
     """Correct ``value`` for ``field`` against its vocabulary; passthrough if no
-    confident match."""
+    confident match.
+
+    ``strict=True`` (digital text, which is near-exact) allows exact-canonical
+    matches only: a cleanly-rendered unfamiliar value is a NEW value, not noise,
+    and must never be force-mapped onto the training vocabulary.
+    """
     vocab = {
         "species_code": SPECIES,
         "home_world": HOME_WORLDS,
@@ -97,4 +107,15 @@ def correct_field(field: str, value: str) -> str:
     hit = exact.get(_canon(value))
     if hit:
         return hit
-    return correct(value, vocab) or value
+    if strict:
+        return value
+    fixed = correct(value, vocab)
+    if not fixed:
+        return value
+    # A near-miss that lands on an embargo world must be a 1-edit misread
+    # (e.g. 'Wolf-1061c' with a broken glyph), never a neighboring designator
+    # like 'Wolf-1062d' — that's a different world.
+    if field == "home_world" and _canon(fixed) in _EMBARGO_CANON:
+        if _edit_distance(_canon(value), _canon(fixed), cap=2) > 1:
+            return value
+    return fixed

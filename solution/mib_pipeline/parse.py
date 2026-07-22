@@ -167,6 +167,7 @@ class Record:
     sponsor_letter_purpose: str = ""
     sponsor_letter_visa: str = ""
     fee_correction: str = ""
+    corrections: Dict[str, str] = field(default_factory=dict)
     field_sources: Dict[str, str] = field(default_factory=dict)
     present_pages: List[str] = field(default_factory=list)
     ocr_used: bool = False
@@ -275,13 +276,19 @@ def _extract_finding(text: str):
     # Scope to the head (header + finding line), dropping the reason section.
     head = _REASON_SPLIT.split(text, maxsplit=1)[0]
     hu = head.upper().replace(" ", "")
-    # Priority APPROVED -> NEEDS_REVIEW -> DENIED avoids denial/review words in a
-    # leaked reason misclassifying an approval or review note.
-    if "APPRO" in hu or "APPRV" in hu:
-        return "APPROVED", ""
-    if "REVI" in hu or "REVIE" in hu or "NEEDS" in hu or "REVICW" in hu:
+    approved = "APPRO" in hu or "APPRV" in hu
+    review = "REVI" in hu or "REVIE" in hu or "NEEDS" in hu or "REVICW" in hu
+    # OCR renders N as M/W: DEMED/DEWED are DENIED misreads; also bare DEN.
+    denied = bool(re.search(r"DENI|DENIE|DEN1|DEMED|DEWE|DEMIED|\bDEN\b", hu))
+    # Ambiguous heads ("requires further review before approval") must not
+    # resolve to the most permissive class.
+    if approved and (review or denied):
         return "NEEDS_REVIEW", ""
-    if "DENI" in hu or "DENIE" in hu or "DEN1" in hu:
+    if approved:
+        return "APPROVED", ""
+    if review:
+        return "NEEDS_REVIEW", ""
+    if denied:
         return "DENIED", ""
     return None, ""
 
@@ -395,6 +402,11 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     matching = [p for p in pages if (_header_case_id(p) or case_id) == case_id]
     use_pages = matching if matching else pages
 
+    CORRECTION_RE = re.compile(
+        r"Manual correction:\s*(sponsor|visa class|applicant|fee status)\s+is\s+([^\n.]+)", re.I)
+    CORRECTION_FIELD = {"sponsor": "sponsor_id", "visa class": "visa_class",
+                        "applicant": "applicant_name", "fee status": "fee_status"}
+
     intake: Dict[str, str] = {}
     registry: Dict[str, str] = {}
     biometric: Dict[str, str] = {}
@@ -402,9 +414,34 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
 
     meaningful_visible = False
 
+    ARCHIVED_RE = re.compile(r"archived\s+adjacent|not\s+active", re.I)
+
     for p in use_pages:
-        vis = [ln for ln in p.visible_lines if not INJECTION_RE.search(ln)]
+        raw_vis = [ln for ln in p.visible_lines if not INJECTION_RE.search(ln)]
+        # Suppress "archived adjacent applicant - not active" blocks: the 3
+        # lines following the marker describe the inactive applicant.
+        vis: List[str] = []
+        skip = 0
+        for ln in raw_vis:
+            if skip > 0:
+                skip -= 1
+                continue
+            if ARCHIVED_RE.search(ln):
+                skip = 3
+                continue
+            vis.append(ln)
         title = p.title or ""
+        # A signed "Manual correction: <field> is <value>." line is precedence-#1
+        # evidence and can appear on any page (usually the intake form).
+        for cm in CORRECTION_RE.finditer("\n".join(vis)):
+            cfield = CORRECTION_FIELD[cm.group(1).lower()]
+            cval = cm.group(2).strip()
+            if cval and not _is_damage(cval):
+                rec.corrections.setdefault(cfield, cval)
+                if cfield == "fee_status":
+                    fv = correct_field("fee_status", cval.lower())
+                    if fv in FEE_VALUES:
+                        rec.fee_correction = fv
         text = "\n".join(vis)
         for t in vis:
             if not t.startswith("Packet ") and t != "Synthetic hiring challenge document" and t not in ALL_LABELS:
@@ -518,7 +555,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
         all_lines: List[str] = []
         for p in use_pages:
             if p.ocr_used:
-                all_lines.extend(p.visible_lines)
+                all_lines.extend(ln for ln in p.visible_lines if not INJECTION_RE.search(ln))
         if all_lines:
             recovered = _garbled_flags(all_lines)
             if recovered != "none":
@@ -541,7 +578,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     # sources outranks a single-source precedence pick that nothing else
     # confirms (OCR misreads rarely repeat verbatim across pages).
     def _nzv(s):
-        return " ".join((s or "").split()).casefold()
+        return re.sub(r"[^a-z0-9 ]", "", " ".join((s or "").split()).casefold()).strip()
 
     def _char_majority(variants: List[str]) -> str:
         """Per-character majority across equal-length readings of the same
@@ -585,9 +622,21 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                                     biometric.get("Applicant"), rec.sponsor_letter_name])
     _corroborate("species_code", [intake.get("species_code"), registry.get("species_code"),
                                   biometric.get("species_code")])
+    # Resolve the sponsor before voting so corroboration has a current value:
+    # first candidate that actually matches the SPN pattern wins (a truthy but
+    # unparseable intake reading must not shadow a valid letter/sweep value).
+    corr_spn = SPONSOR_RE.search(rec.corrections.get("sponsor_id", "") or "")
+    for cand in ([corr_spn.group(0)] if corr_spn else []) + [
+            intake.get("sponsor_id"), rec.sponsor_letter_id, rec.sponsor_id]:
+        m = SPONSOR_RE.search(cand or "")
+        if m:
+            rec.sponsor_id = m.group(0)
+            break
     spn_occurrences: List[str] = []
     for p in use_pages:
         for ln in p.visible_lines:
+            if INJECTION_RE.search(ln):
+                continue
             spn_occurrences.extend(SPONSOR_RE.findall(ln))
     _corroborate("sponsor_id", spn_occurrences)
 
@@ -597,13 +646,27 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     if any(p.ocr_used for p in use_pages):
         sweep_lines: List[str] = []
         for p in use_pages:
-            sweep_lines.extend(p.visible_lines)
+            sweep_lines.extend(ln for ln in p.visible_lines if not INJECTION_RE.search(ln))
         swept = _pattern_sweep(sweep_lines)
         for fld in ("sponsor_id", "arrival_date", "visa_class", "species_code",
                     "home_world", "declared_purpose"):
             if not getattr(rec, fld) and swept.get(fld):
                 rec.field_sources[fld] = "sweep"
                 setattr(rec, fld, swept[fld])
+
+    # Trailing OCR junk on names ("Nexix Nexvara . :|") is never part of a name.
+    if rec.applicant_name:
+        rec.applicant_name = re.sub(r"[^A-Za-z)\]]+$", "", rec.applicant_name).strip()
+    # If the name came through OCR and the sponsor letter names a near-identical
+    # person, the letter's clean rendering wins (same-person variants only —
+    # a genuinely different letter name is the sponsor_mismatch trap and must
+    # not replace the active applicant).
+    if rec.ocr_used and rec.applicant_name and rec.sponsor_letter_name:
+        from .vocab import _canon, _edit_distance
+        a, b = _canon(rec.applicant_name), _canon(rec.sponsor_letter_name)
+        tol = max(2, int(0.34 * max(len(a), len(b))))
+        if a != b and _edit_distance(a, b, cap=tol) <= tol:
+            rec.applicant_name = rec.sponsor_letter_name.strip()
 
     # Keep only calendar-valid arrival dates; an OCR-misread impossible date is
     # not trusted evidence.
@@ -617,7 +680,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     for fld in ("species_code", "home_world", "visa_class", "declared_purpose"):
         val = getattr(rec, fld)
         if val:
-            setattr(rec, fld, correct_field(fld, val))
+            setattr(rec, fld, correct_field(fld, val, strict=not rec.ocr_used))
 
     # Blank out fields whose visible value is a damage marker so the
     # completeness gate correctly treats them as unrecoverable.
@@ -630,9 +693,15 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     # Sponsor: intake form primary, sponsor letter as fallback. Only accept a
     # value that actually matches the SPN-#### pattern (guards against watermark
     # traps like "SAMPLE DENIAL" landing in the value slot).
-    sponsor = intake.get("sponsor_id") or rec.sponsor_letter_id or rec.sponsor_id
-    m = SPONSOR_RE.search(sponsor or "")
-    rec.sponsor_id = m.group(0) if m else ""
+    # First candidate that actually matches the SPN pattern wins — a truthy but
+    # unparseable intake reading must not shadow a valid letter/sweep value.
+    for cand in (rec.sponsor_id, intake.get("sponsor_id"), rec.sponsor_letter_id):
+        m = SPONSOR_RE.search(cand or "")
+        if m:
+            rec.sponsor_id = m.group(0)
+            break
+    else:
+        rec.sponsor_id = ""
 
     # Strip trailing placeholder noise from species (e.g. "ARCTURIAN SCAN IMAGE").
     if rec.species_code:
@@ -665,7 +734,9 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
         return _edit_distance(ca, cb, cap=tol) > tol
 
     names = [v for v in [intake.get("applicant_name"), registry.get("applicant_name"), biometric.get("Applicant")] if v and not _is_damage(v)]
-    specs = [correct_field("species_code", v) for v in [intake.get("species_code"), registry.get("species_code"), biometric.get("species_code")] if v and not _is_damage(v)]
+    specs = [cv for v in [intake.get("species_code"), registry.get("species_code"), biometric.get("species_code")]
+             if v and not _is_damage(v)
+             for cv in [correct_field("species_code", v)] if cv in SPECIES]
     if any(_really_different(a, b) for i, a in enumerate(names) for b in names[i + 1:]) \
             or len({s.upper() for s in specs}) > 1:
         rec.identity_conflict = True

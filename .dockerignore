@@ -15,3 +15,11 @@ data/validation/
 submissions/
 *.zip
 *.zip.sha256
+data/
+.git/
+submissions/
+examples/
+scripts/
+tests/
+solution/experiments/
+*.zip

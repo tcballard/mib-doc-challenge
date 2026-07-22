@@ -43,7 +43,9 @@ def _valid_waiver(rec: Record) -> bool:
     wc = (rec.waiver_code or "").strip().upper()
     if wc in ("", "N/A", "NONE"):
         return False
-    return any(k in wc for k in ("DIP-WAIVER", "HARDSHIP", "WAIVER"))
+    # Exact/prefix forms only: substring matching would accept adversarial
+    # codes like "NO-WAIVER" or "WAIVER-VOID".
+    return wc == "DIP-WAIVER" or wc.startswith("HARDSHIP") or wc.startswith("DIP-WAIVER")
 
 
 def _parse_date(s: str):
@@ -74,8 +76,10 @@ REASON_CONFIDENCE = {
     "embargo_world": 0.76,
     "revoked_sponsor": 0.70,
     "fee_unpaid": 0.89,
-    "stale_application": 0.46,
-    "stale_ocr": 0.38,
+    "stale_mid": 0.64,
+    "stale_deep": 0.82,
+    "unknown_flag": 0.60,
+    "approve_nobio_ocr": 0.34,
     "fee_unknown": 0.95,
     "missing_arrival_date": 0.39,
     "review_flag": 0.95,
@@ -145,8 +149,15 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
     # (measured ~40% denial precision): route to review rather than deny.
     if purpose == "transit":
         return "NEEDS_REVIEW", _conf("transit_purpose"), "transit_purpose"
-    if sponsor in REVOKED_SPONSORS:
+    # The manual exempts DIP-1 from the sponsor requirement entirely, so a
+    # revoked sponsor cannot disqualify a diplomatic packet (measured: truth
+    # approves 16/19 revoked-sponsor DIP-1 cases).
+    if sponsor in REVOKED_SPONSORS and visa != "DIP-1":
         return "DENIED", _conf("revoked_sponsor"), "revoked_sponsor"
+    # A revoked sponsor named in the attestation letter is the same
+    # disqualifier even when the intake field itself was unreadable.
+    if visa != "DIP-1" and (rec.sponsor_letter_id or "").upper() in REVOKED_SPONSORS:
+        return "DENIED", _conf("revoked_sponsor"), "revoked_sponsor_letter"
     if world in EMBARGO_WORLDS:
         return "DENIED", _conf("embargo_world"), "embargo_world"
     # A registry extract stamped for embargo review is denial evidence even when
@@ -159,9 +170,11 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
     # On OCR-parsed packets the date itself may be a misread, so a stale-looking
     # date is only grounds for review, not denial.
     if now and ad and (now - ad).days > STALE_DAYS and visa != "DIP-1":
-        if rec.ocr_used:
-            return "NEEDS_REVIEW", _conf("stale_ocr"), "stale_ocr"
-        return "DENIED", _conf("stale_application"), "stale_application"
+        # Banded by depth (measured): 180-365 days routes to review on both
+        # paths; beyond a year the denial signal dominates even on OCR'd dates.
+        if (now - ad).days > 365:
+            return "DENIED", _conf("stale_deep"), "stale_deep"
+        return "NEEDS_REVIEW", _conf("stale_mid"), "stale_mid"
 
     # --- Review conditions -> NEEDS_REVIEW ---
     if rec.fee_observed and fee == "unknown":
@@ -169,6 +182,9 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
     if not ad:
         return "NEEDS_REVIEW", _conf("missing_arrival_date"), "missing_arrival_date"
 
+    unknown_flags = flags - DISQUALIFYING - REVIEW_ONLY
+    if unknown_flags:
+        return "NEEDS_REVIEW", _conf("unknown_flag"), f"unknown_flag:{'|'.join(sorted(unknown_flags))}"
     review = flags & REVIEW_ONLY
     if review:
         return "NEEDS_REVIEW", _conf("review_flag"), f"review_flag:{'|'.join(sorted(review))}"
@@ -189,6 +205,11 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
     # flag recovery — now drain those denials out before reaching this point,
     # and the measured expected score of approving exceeds review on both the
     # digital and OCR halves of the bucket.)
+    # An OCR-parsed packet with no recognizable biometric slip may be hiding an
+    # unreadable flag (measured subgroup: review beats approve on expected
+    # value); route to review instead of approving on incomplete risk evidence.
+    if rec.ocr_used and "biometric" not in rec.present_pages:
+        return "NEEDS_REVIEW", _conf("approve_nobio_ocr"), "approve_nobio_ocr"
     if visa == "DIP-1":
         return "APPROVED", _conf("approved_dip"), "approved_dip"
     return "APPROVED", _conf("clean_approved"), "clean_approved"

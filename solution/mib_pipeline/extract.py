@@ -19,7 +19,8 @@ except Exception:  # pragma: no cover
 
 # A span is "hidden" (untrusted) if any of these hold.
 WHITE_THRESHOLD = 235  # channel value above which we treat ink as white/near-bg
-MIN_FONT_SIZE = 5.0    # spans smaller than this are decoys, not readable evidence
+PALE_MIN_CHANNEL = 200  # ink whose darkest channel is this light is unreadable on paper
+MIN_FONT_SIZE = 6.5    # no legitimate field value in the corpus renders below ~8pt
 
 
 @dataclass
@@ -56,7 +57,11 @@ def _is_white(color: int) -> bool:
     r = (color >> 16) & 255
     g = (color >> 8) & 255
     b = color & 255
-    return r > WHITE_THRESHOLD and g > WHITE_THRESHOLD and b > WHITE_THRESHOLD
+    if r > WHITE_THRESHOLD and g > WHITE_THRESHOLD and b > WHITE_THRESHOLD:
+        return True
+    # Near-white / pale ink: unreadable on a white page even if not pure white.
+    # Legitimate text in the corpus has min-channel <= 102; wide margin.
+    return min(r, g, b) > PALE_MIN_CHANNEL
 
 
 def _page_lines(page) -> List[Line]:
@@ -112,9 +117,26 @@ def _page_lines(page) -> List[Line]:
     return out
 
 
-def _title(visible: List[str]) -> str:
+FOOTER_RE = re.compile(r"(?i)^packet\s+\S+\s*/\s*page\s*\d")
+
+
+def _doc_boilerplate(page_lines: List[List[str]]) -> set:
+    """Lines repeated on most pages of a document are boilerplate (footers,
+    watermark text), whatever their wording — no literal strings assumed."""
+    if len(page_lines) < 3:
+        return set()
+    from collections import Counter as _C
+    freq = _C()
+    for lines in page_lines:
+        for t in set(lines):
+            freq[t] += 1
+    cutoff = max(2, int(0.8 * len(page_lines)))
+    return {t for t, n in freq.items() if n >= cutoff}
+
+
+def _title(visible: List[str], boilerplate: set = frozenset()) -> str:
     for t in visible:
-        if t.startswith("Packet ") or t == "Synthetic hiring challenge document":
+        if FOOTER_RE.match(t) or t in boilerplate:
             continue
         return t
     return ""
@@ -129,26 +151,34 @@ def extract_pages(path: str, ocr_fn=None) -> List[Page]:
     """
     doc = fitz.open(path)
     pages: List[Page] = []
+    # First pass: collect visible lines per page so document boilerplate can be
+    # learned (never assume literal footer wording — private sets may differ).
+    prelim = []
     for i in range(doc.page_count):
         p = doc[i]
         lines = _page_lines(p)
+        prelim.append((p, lines, [l.text for l in lines if not l.hidden]))
+    boilerplate = _doc_boilerplate([v for _, _, v in prelim])
+
+    for i, (p, lines, visible) in enumerate(prelim):
         n_images = len(p.get_images())
-        visible = [l.text for l in lines if not l.hidden]
-        # Strip boilerplate for the "meaningful visible content" test.
-        meaningful = [
-            t for t in visible
-            if not t.startswith("Packet ") and t != "Synthetic hiring challenge document"
-        ]
+        # Meaningful visible content: everything that is not a footer line or
+        # per-document boilerplate. Quantitative gate — a page with an image and
+        # almost no meaningful text is a scan needing OCR.
+        meaningful_chars = sum(
+            len(t) for t in visible
+            if not FOOTER_RE.match(t) and t not in boilerplate
+        )
         page = Page(
             index=i,
             rotation=p.rotation,
-            title=_title(visible),
+            title=_title(visible, boilerplate),
             lines=lines,
             hidden_lines=[l.text for l in lines if l.hidden],
             n_images=n_images,
         )
         # Scanned page: has an image but no meaningful text layer -> OCR.
-        if ocr_fn is not None and not meaningful and n_images:
+        if ocr_fn is not None and meaningful_chars < 40 and n_images:
             ocr_lines = ocr_fn(p)
             if ocr_lines:
                 page.ocr_used = True
@@ -157,7 +187,7 @@ def extract_pages(path: str, ocr_fn=None) -> List[Page]:
                         Line(text=t, size=10.0, x0=0, y0=0, x1=0, y1=0, hidden=False)
                     )
                 if not page.title:
-                    page.title = _title(page.visible_lines)
+                    page.title = _title(page.visible_lines, boilerplate)
         pages.append(page)
     doc.close()
     return pages

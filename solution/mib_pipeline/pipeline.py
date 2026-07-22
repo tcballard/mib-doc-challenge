@@ -36,7 +36,7 @@ OUTPUT_FIELDS = [
     "adjudication", "confidence",
 ]
 
-CASE_ID_RE = re.compile(r"MIB-\d{6}")
+CASE_ID_RE = re.compile(r"MIB-\d{6,}")
 SPN_RE = re.compile(r"^SPN-\d{4}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -78,6 +78,15 @@ def parse_one(path: str, use_ocr: bool = True, allow_escalation: bool = True) ->
     case_id = m.group(0) if m else case_id
     ocr_fn = make_ocr_fn() if (use_ocr and ocr_available()) else None
     pages = extract_pages(path, ocr_fn=ocr_fn)
+    if not m:
+        from collections import Counter as _C
+        ids = _C()
+        for pg in pages:
+            for ln in pg.visible_lines:
+                for hm in CASE_ID_RE.finditer(ln):
+                    ids[hm.group(0)] += 1
+        if ids:
+            case_id = ids.most_common(1)[0][0]
     rec = parse_packet(case_id, pages)
 
     # Escalation layer ("onion" architecture): the cheap layers handle most
@@ -169,14 +178,40 @@ def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
     fee_out = rec.fee_status if rec.fee_observed else "paid"
     if fee_out not in {"paid", "waived", "unpaid", "unknown"}:
         fee_out = "unknown"
+    # Signed manual corrections override the *emitted* fields (precedence-#1
+    # extraction evidence; policy inputs stay as-is per measured behavior —
+    # the fee variant already feeds policy inside parse).
+    corr = getattr(rec, "corrections", None) or {}
+    name_out = corr.get("applicant_name") or rec.applicant_name
+    visa_out = rec.visa_class
+    if corr.get("visa_class"):
+        from .parse import VISA_RE, _visa_normalize
+        vm = VISA_RE.search(_visa_normalize(corr["visa_class"]))
+        if vm:
+            visa_out = vm.group(1)
+    sponsor_out = rec.sponsor_id
+    cm = re.search(r"SPN-\d{4}", corr.get("sponsor_id", "") or "")
+    if cm:
+        sponsor_out = cm.group(0)
+    # Repair OCR-misread years relative to the batch era (never a hardcoded
+    # calendar year).
+    date_out = rec.arrival_date
+    dm = re.search(r"(\d{4})-(\d{2}-\d{2})", date_out or "")
+    if now and dm and abs(int(dm.group(1)) - now.year) > 1:
+        candidate = f"{now.year}-{dm.group(2)}"
+        try:
+            datetime.date.fromisoformat(candidate)
+            date_out = candidate
+        except ValueError:
+            pass
     return {
         "case_id": rec.case_id,
-        "applicant_name": _clean_text(rec.applicant_name),
+        "applicant_name": _clean_text(name_out),
         "species_code": _clean_text(rec.species_code),
         "home_world": _clean_text(rec.home_world),
-        "visa_class": _clean_text(rec.visa_class),
-        "sponsor_id": _clean_sponsor(rec.sponsor_id),
-        "arrival_date": _clean_date(rec.arrival_date),
+        "visa_class": _clean_text(visa_out),
+        "sponsor_id": _clean_sponsor(sponsor_out),
+        "arrival_date": _clean_date(date_out),
         "declared_purpose": _clean_text(rec.declared_purpose),
         "risk_flags": rec.risk_flags or "none",
         "fee_status": fee_out,
@@ -228,7 +263,8 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
     import dataclasses
     import time
 
-    pdfs = sorted(str(p) for p in Path(input_dir).glob("*.pdf"))
+    pdfs = sorted(str(p) for p in Path(input_dir).iterdir()
+                  if p.is_file() and p.suffix.lower() == ".pdf")
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -276,8 +312,12 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
                 if rec is None:
                     continue
                 done[rec.case_id] = rec
-                ckpt_f.write(json.dumps(dataclasses.asdict(rec)) + "\n")
+                if not (rec.scanned and not rec.present_pages and not rec.applicant_name):
+                    ckpt_f.write(json.dumps(dataclasses.asdict(rec)) + "\n")
             ckpt_f.flush()
+            # Rewrite output after every batch: a killed/timed-out container is
+            # scored on everything parsed so far instead of nothing.
+            _write_predictions(list(done.values()), out)
 
             # Governor: project finish time from THIS run's pace (checkpointed
             # packets cost no time now); degrade before the budget is at risk.
@@ -292,18 +332,23 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
         ckpt_f.close()
 
     records: List[Record] = list(done.values())
+    try:
+        ckpt.unlink()  # completed runs must not poison a later different corpus
+    except OSError:
+        pass
+    _write_predictions(records, out)
+    return len(records)
 
-    # Reference "now" for staleness = most recent arrival date in the batch, so
-    # the staleness rule adapts to the era of the data rather than a fixed date.
+
+def _write_predictions(records: List[Record], out: Path) -> None:
     now = batch_reference_date(records)
-
-    # Pass 2: adjudicate + format (cheap).
     results = [_format_row(rec, now) for rec in records]
     results.sort(key=lambda r: r["case_id"])
-    with open(out, "w") as f:
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    with open(tmp, "w") as f:
         for r in results:
             f.write(json.dumps({k: r[k] for k in OUTPUT_FIELDS}, sort_keys=True) + "\n")
-    return len(results)
+    os.replace(tmp, out)
 
 
 def main(argv=None):
