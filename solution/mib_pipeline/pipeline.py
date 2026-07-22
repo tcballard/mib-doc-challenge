@@ -67,8 +67,12 @@ def _clean_text(v: str) -> str:
     return v if v else "unknown"
 
 
-def parse_one(path: str, use_ocr: bool = True) -> Record:
-    """Extract + parse a single PDF into a Record (no adjudication)."""
+def parse_one(path: str, use_ocr: bool = True, allow_escalation: bool = True) -> Record:
+    """Extract + parse a single PDF into a Record (no adjudication).
+
+    ``allow_escalation=False`` is the budget governor's degraded mode: cheap
+    layers only, used when the batch is pacing over the runtime budget.
+    """
     case_id = Path(path).stem
     m = CASE_ID_RE.search(case_id)
     case_id = m.group(0) if m else case_id
@@ -79,7 +83,7 @@ def parse_one(path: str, use_ocr: bool = True) -> Record:
     # Escalation layer ("onion" architecture): the cheap layers handle most
     # packets in well under budget; packets they leave deficient get a second,
     # much heavier OCR sweep, and the two parses merge field-wise.
-    if use_ocr and rec.ocr_used and (_deficiency(rec) >= 3 or _critical_gap(rec)):
+    if use_ocr and allow_escalation and rec.ocr_used and (_deficiency(rec) >= 3 or _critical_gap(rec)):
         try:
             from .ocr import make_escalated_ocr_fn
             pages2 = extract_pages(path, ocr_fn=make_escalated_ocr_fn())
@@ -147,8 +151,13 @@ def _merge_records(a: Record, b: Record) -> Record:
 
 
 def _worker(path):
+    return _worker_mode((path, True))
+
+
+def _worker_mode(args):
+    path, allow_escalation = args
     try:
-        return parse_one(path)
+        return parse_one(path, allow_escalation=allow_escalation)
     except Exception:
         # Never let one bad PDF kill the batch.
         m = CASE_ID_RE.search(Path(path).stem)
@@ -196,7 +205,29 @@ def process_pdf(path: str, use_ocr: bool = True, now: Optional[datetime.date] = 
     return _format_row(parse_one(path, use_ocr=use_ocr), now)
 
 
+# Runtime contract: 6s per PDF on average. The governor paces against a
+# fraction of it so the run always lands inside the cap with margin.
+BUDGET_S_PER_PDF = 6.0
+BUDGET_SAFETY = 0.80
+BATCH_SIZE = 200
+CHECKPOINT = "/tmp/mib_run_checkpoint.jsonl"
+
+
 def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
+    """Process the input directory in batches with a runtime-budget governor.
+
+    - Batched: packets stream through in chunks of BATCH_SIZE; per-packet
+      results checkpoint to /tmp (the contract's writable tmpfs) as each batch
+      completes, so an interrupted run resumes instead of restarting.
+    - Governed: between batches, projected finish time is compared against the
+      6s/PDF contract budget (with safety margin); if pacing over, the
+      escalation layer is disabled for remaining batches — degraded reads beat
+      a blown budget, exactly as an emitted low-confidence row beats an
+      omission.
+    """
+    import dataclasses
+    import time
+
     pdfs = sorted(str(p) for p in Path(input_dir).glob("*.pdf"))
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -204,17 +235,63 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
     if workers is None:
         workers = max(1, min(4, (os.cpu_count() or 2)))
 
-    # Pass 1: parse every packet (expensive: PDF + OCR), parallelized.
-    records: List[Record] = []
-    if workers > 1 and len(pdfs) > 1:
-        import multiprocessing as mp
-        with mp.Pool(processes=workers) as pool:
-            for rec in pool.imap_unordered(_worker, pdfs, chunksize=4):
-                if rec is not None:
-                    records.append(rec)
-    else:
-        for p in pdfs:
-            records.append(_worker(p))
+    # Resume from checkpoint if a previous interrupted run left one.
+    done: Dict[str, Record] = {}
+    ckpt = Path(CHECKPOINT)
+    if ckpt.exists():
+        for line in ckpt.read_text().splitlines():
+            try:
+                d = json.loads(line)
+                n = d.pop("note", {})
+                r = Record(**{k: v for k, v in d.items()
+                              if k in Record.__dataclass_fields__ and k != "note"})
+                from .parse import Note
+                r.note = Note(**n)
+                done[r.case_id] = r
+            except Exception:
+                continue
+    # Only honor checkpoint entries belonging to this input set — a stale
+    # checkpoint from a different corpus must not leak cases into the output.
+    stems = {Path(p).stem for p in pdfs}
+    done = {cid: r for cid, r in done.items() if cid in stems}
+    todo = [p for p in pdfs if Path(p).stem not in done]
+
+    total_budget = BUDGET_S_PER_PDF * len(pdfs) * BUDGET_SAFETY
+    start = time.monotonic()
+    allow_escalation = True
+    processed_this_run = 0
+
+    import multiprocessing as mp
+    ckpt_f = open(ckpt, "a")
+    try:
+        for i in range(0, len(todo), BATCH_SIZE):
+            batch = todo[i:i + BATCH_SIZE]
+            args = [(p, allow_escalation) for p in batch]
+            if workers > 1 and len(batch) > 1:
+                with mp.Pool(processes=workers) as pool:
+                    batch_recs = list(pool.imap_unordered(_worker_mode, args, chunksize=4))
+            else:
+                batch_recs = [_worker_mode(a) for a in args]
+            for rec in batch_recs:
+                if rec is None:
+                    continue
+                done[rec.case_id] = rec
+                ckpt_f.write(json.dumps(dataclasses.asdict(rec)) + "\n")
+            ckpt_f.flush()
+
+            # Governor: project finish time from THIS run's pace (checkpointed
+            # packets cost no time now); degrade before the budget is at risk.
+            processed_this_run += len(batch)
+            elapsed = time.monotonic() - start
+            remaining = len(pdfs) - len(done)
+            if allow_escalation and processed_this_run and remaining:
+                projected = elapsed + (elapsed / processed_this_run) * remaining
+                if projected > total_budget:
+                    allow_escalation = False
+    finally:
+        ckpt_f.close()
+
+    records: List[Record] = list(done.values())
 
     # Reference "now" for staleness = most recent arrival date in the batch, so
     # the staleness rule adapts to the era of the data rather than a fixed date.
