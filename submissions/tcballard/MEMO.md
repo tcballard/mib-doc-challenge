@@ -110,7 +110,7 @@ unlocks an approval.
   private test that introduces new embargoed worlds without an adjudicator note
   would slip through. The note path and the registry "EMBARGO REVIEW" status
   (both stated in-document) are the generalizable backstops.
-- **Catastrophic false approvals** run ~37/1000 on train — the price of
+- **Catastrophic false approvals** run ~24/1000 on train — the price of
   EV-optimal approval on a bucket with residual label noise; each is a case
   whose denial evidence is absent from the packet.
 
