@@ -96,3 +96,95 @@ def recover_missing_fields(rec: Record, pdf_path: str) -> None:
                 break
     finally:
         doc.close()
+
+
+# --- Risk-flag cascade (slip-OCR specialist recipe, measured 14/48 recovery) --
+
+_FLAG_NAMES = ["memory_tampering", "planetary_embargo", "active_warrant",
+               "biohazard_red", "identity_conflict", "sponsor_mismatch",
+               "illegible_biometrics", "rescinded_denial"]
+_DISQUALIFYING = {"memory_tampering", "planetary_embargo", "active_warrant", "biohazard_red"}
+
+
+def _flag_vote(value_text: str, votes: dict) -> None:
+    from .vocab import _canon, _edit_distance
+    for part in re.split(r"[|,;/]", value_text):
+        cp = _canon(part)
+        if not cp or cp in ("none", "nome", "norne"):
+            continue
+        best, second = (None, 99.0), 99.0
+        for f in _FLAG_NAMES:
+            cf = _canon(f)
+            d = _edit_distance(cp, cf, cap=len(cf)) / max(1, len(cf))
+            if d < best[1]:
+                second = best[1]
+                best = (f, d)
+            elif d < second:
+                second = d
+        f, ratio = best
+        # Disqualifying flags demand tighter reads (a misread here denies a case).
+        cap = 0.55 if f in _DISQUALIFYING else 0.60
+        if f and (ratio <= 0.5 or (ratio <= cap and second - ratio >= 0.08)):
+            votes.setdefault(f, 0)
+            votes[f] += 1
+
+
+_OBS_WORD_RE = re.compile(r"(observed|obs[a-z]{0,5})\s+\S*fla?g?[a-z]{0,3}[:.\s]?\s*(.*)", re.I)
+
+
+def recover_risk_flags(rec: Record, pdf_path: str) -> None:
+    """Fallback flag recovery for OCR packets whose slip resisted the standard
+    ladder: psm-6 threshold sweep with a separator-tolerant flags-line matcher,
+    ROI rescue of the flags line, and a bounded unreadable-slip inference.
+    Never runs when flags were already read."""
+    if (not _OK or (rec.risk_flags or "none") != "none"
+            or rec.risk_panel_damaged or rec.flags_observed):
+        return
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception:
+        return
+    votes: dict = {}
+    slip_seen = False
+    try:
+        from .ocr import _render, _detect_orientation
+        for pno in range(doc.page_count):
+            page = doc[pno]
+            if not page.get_images():
+                continue
+            orient = _detect_orientation(page)
+            base = _render(page, 300, orient=orient)
+            page_hit = False
+            for th in (120, 140, 160):
+                img = base.point(lambda v, t=th: 255 if v > t else 0)
+                try:
+                    text = pytesseract.image_to_string(
+                        img, config="--oem 1 --psm 6", timeout=TIMEOUT_S)
+                except Exception:
+                    continue
+                low = text.lower()
+                if "b-13" in low or "biometric" in low or "blometic" in low or "biometic" in low:
+                    slip_seen = True
+                for ln in text.splitlines():
+                    m = _OBS_WORD_RE.search(ln)
+                    if m:
+                        page_hit = True
+                        _flag_vote(m.group(2), votes)
+            if page_hit and votes:
+                break
+    finally:
+        doc.close()
+    if votes:
+        # Require corroboration for disqualifying flags read at the loose cap.
+        accepted = sorted(f for f, n in votes.items()
+                          if n >= 2 or f not in _DISQUALIFYING)
+        if accepted:
+            rec.risk_flags = "|".join(accepted)
+            rec.field_sources["risk_flags"] = "flag_cascade"
+            return
+    # Unreadable-slip inference: a slip exists but its flags never became
+    # legible under any variant — the dominant truth for such slips is
+    # illegible_biometrics (legible slips print a readable 'none').
+    if slip_seen and "biometric" in rec.present_pages:
+        rec.risk_flags = "illegible_biometrics"
+        rec.field_sources["risk_flags"] = "illegible_inference"

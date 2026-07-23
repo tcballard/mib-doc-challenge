@@ -106,8 +106,9 @@ def parse_one(path: str, use_ocr: bool = True, allow_escalation: bool = True) ->
 
     if use_ocr and rec.ocr_used:
         try:
-            from .recover import recover_missing_fields
+            from .recover import recover_missing_fields, recover_risk_flags
             recover_missing_fields(rec, path)
+            recover_risk_flags(rec, path)
         except Exception:
             pass
     return rec

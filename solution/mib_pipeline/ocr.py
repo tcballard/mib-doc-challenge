@@ -219,6 +219,8 @@ def _escalation_variants(page):
     yield "segment", run(base, 6)
     for th in ESCALATION_THRESHOLDS:
         yield "threshold", run(base.point(lambda v, t=th: 255 if v > t else 0), 4)
+    for th in ESCALATION_THRESHOLDS:
+        yield "threshold6", run(base.point(lambda v, t=th: 255 if v > t else 0), 6)
     yield "contrast", run(ImageOps.autocontrast(base, cutoff=2), 4)
     # Sparse-text mode: recovers free-floating words when layout analysis fails.
     yield "sparse", run(base, 11)

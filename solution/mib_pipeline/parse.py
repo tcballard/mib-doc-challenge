@@ -132,9 +132,14 @@ def _garbled_flags(lines: List[str]) -> str:
     flag names at up to 50% noise."""
     from .vocab import _canon, _edit_distance, correct as vocab_correct
     for ln in lines:
-        if ":" not in ln:
+        # OCR renders the separator as ':', '.', or nothing at all.
+        m = re.match(r"\s*(\S+\s+\S+?)[:.\s]\s*(.+)$", ln)
+        if ":" in ln:
+            label, _, value = ln.partition(":")
+        elif m:
+            label, value = m.group(1), m.group(2)
+        else:
             continue
-        label, _, value = ln.partition(":")
         cl = _canon(label)
         if not cl or abs(len(cl) - len(_OBSERVED_LABEL)) > 5:
             continue
@@ -191,6 +196,7 @@ class Record:
     identity_conflict: bool = False
     stamp_verdict: str = ""
     risk_panel_damaged: bool = False
+    flags_observed: bool = False
 
 
 PLACEHOLDERS = {"passport image", "registry image", "scan image", "primary intake record",
@@ -350,9 +356,14 @@ def _inline_fields(lines: List[str]) -> Dict[str, str]:
     """Parse inline 'Label: value' lines with OCR-tolerant label matching."""
     out: Dict[str, str] = {}
     for ln in lines:
-        if ":" not in ln:
+        # OCR renders the separator as ':', '.', or nothing at all.
+        m = re.match(r"\s*(\S+\s+\S+?)[:.\s]\s*(.+)$", ln)
+        if ":" in ln:
+            label, _, value = ln.partition(":")
+        elif m:
+            label, value = m.group(1), m.group(2)
+        else:
             continue
-        label, _, value = ln.partition(":")
         value = value.strip()
         if not value:
             continue
@@ -506,6 +517,10 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             if _is_damage(obs):
                 # The risk panel itself is destroyed: flags are unverifiable.
                 rec.risk_panel_damaged = True
+            elif obs.strip():
+                # A legible value was read (even a legible 'none') — downstream
+                # recovery must not second-guess it.
+                rec.flags_observed = True
             flags = _correct_flag_tokens(_norm_flags(obs))
             if flags == "none":
                 # OCR may have mangled the "Observed flags:" label; scan the whole
