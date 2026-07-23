@@ -3,6 +3,7 @@ from collections import Counter
 sys.path.insert(0, "solution")
 from mib_pipeline.parse import Record, Note
 from mib_pipeline.policy import adjudicate
+from mib_pipeline.pipeline import _format_row
 
 recs = json.load(open(sys.argv[1] if len(sys.argv)>1 else "/tmp/parse_cache_v3.json"))
 truth = {r["case_id"]: r for r in csv.DictReader(open("data/train_labels.csv"))}
@@ -33,8 +34,8 @@ W = {"applicant_name":5,"species_code":6,"home_world":5,"visa_class":5,"sponsor_
 raw=0;n=0;cat=0;correct=0;er=0.0;em=0.0;briers=[];conf=Counter();fa=Counter();ft=Counter()
 for cid, d in recs.items():
     rec = rebuild(d); t = truth[cid]
-    p, c, reason = adjudicate(rec, now=NOW)
-    fee_out = rec.fee_status if rec.fee_observed else "paid"
+    row = _format_row(rec, NOW)
+    p, c = row["adjudication"], row["confidence"]
     raw += cls_pts(t["adjudication"], p); n += 1
     conf[(t["adjudication"], p)] += 1
     ac = t["adjudication"] == p
@@ -42,7 +43,7 @@ for cid, d in recs.items():
     briers.append((c - (1.0 if ac else 0.0))**2)
     if t["adjudication"]=="DENIED" and p=="APPROVED": cat += 1
     for fld in FIELDS:
-        pv = fee_out if fld=="fee_status" else getattr(rec, fld)
+        pv = row[fld]
         tv = nf(t[fld]) if fld=="risk_flags" else nz(t[fld])
         pvn = nf(pv) if fld=="risk_flags" else nz(pv)
         em += W[fld]; ft[fld]+=1
