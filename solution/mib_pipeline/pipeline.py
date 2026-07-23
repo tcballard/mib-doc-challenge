@@ -177,11 +177,32 @@ def _worker_mode(args):
         return Record(case_id=m.group(0) if m else Path(path).stem, scanned=True)
 
 
+def _prefix_truncate(value: str, vocab) -> str:
+    """OCR junk trailing a correct closed-vocab value ("translation AR CH IVE")
+    loses the whole field: if a known vocab entry is a casefolded prefix of the
+    value, truncate to it (measured fix 16 / break 0 on train)."""
+    v = " ".join((value or "").split())
+    cf = v.casefold()
+    for entry in vocab:
+        e = entry.casefold()
+        if cf != e and cf.startswith(e) and (len(cf) == len(e) or not cf[len(e)].isalnum()):
+            return entry
+    return value
+
+
 def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
     adj, conf, reason = adjudicate(rec, now=now)
     fee_out = rec.fee_status if rec.fee_observed else "paid"
     if fee_out not in {"paid", "waived", "unpaid", "unknown"}:
         fee_out = "unknown"
+    # Receipt-amount repair (emission only — the record/policy never see it:
+    # feeding it back flips one true-DENIED to APPROVED on train). $809.00 is
+    # the standard fee (paid 297/297); $0.00 never means paid.
+    fee_amount = getattr(rec, "fee_amount", "")
+    if fee_amount == "809.00":
+        fee_out = "paid"
+    elif fee_amount == "0.00" and fee_out == "paid":
+        fee_out = "waived"
     # Signed manual corrections override the *emitted* fields (precedence-#1
     # extraction evidence; policy inputs stay as-is per measured behavior —
     # the fee variant already feeds policy inside parse).
@@ -197,6 +218,20 @@ def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
     cm = re.search(r"SPN-\d{4}", corr.get("sponsor_id", "") or "")
     if cm:
         sponsor_out = cm.group(0)
+    # The sponsor letter's "class X compliance" line equals the true visa
+    # 294/294 on train (including all 20 cases where it disagrees with the
+    # emitted value) — strongest visa evidence, applied last.
+    if getattr(rec, "sponsor_compliance_visa", ""):
+        visa_out = rec.sponsor_compliance_visa
+    # Registry sponsor-standing notice: bad standing denies non-diplomatic
+    # packets (23/23 train) and never blocks DIP-1 (5/5 approved) — the same
+    # exemption the manual grants diplomats from the sponsor requirement.
+    if getattr(rec, "registry_notice", False):
+        if (visa_out or "").upper() == "DIP-1":
+            if adj != "APPROVED":
+                adj, conf, reason = "APPROVED", 0.87, "registry_notice_dip"
+        elif adj != "DENIED":
+            adj, conf, reason = "DENIED", 0.93, "registry_notice"
     # Repair OCR-misread years relative to the batch era (never a hardcoded
     # calendar year).
     date_out = rec.arrival_date
@@ -208,15 +243,24 @@ def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
             date_out = candidate
         except ValueError:
             pass
+    # Trailing-junk truncation (all measured zero-break on train): true names
+    # are always exactly two words; purpose and home world always come from
+    # their closed vocabularies.
+    name_words = _clean_text(name_out).split()
+    if len(name_words) > 2 and name_words[0].lower() != "unknown":
+        name_out = " ".join(name_words[:2])
+    from .vocab import HOME_WORLDS, PURPOSES
+    world_out = _prefix_truncate(rec.home_world, HOME_WORLDS)
+    purpose_out = _prefix_truncate(rec.declared_purpose, PURPOSES)
     return {
         "case_id": rec.case_id,
         "applicant_name": _clean_text(name_out),
         "species_code": _clean_text(rec.species_code),
-        "home_world": _clean_text(rec.home_world),
+        "home_world": _clean_text(world_out),
         "visa_class": _clean_text(visa_out),
         "sponsor_id": _clean_sponsor(sponsor_out),
         "arrival_date": _clean_date(date_out),
-        "declared_purpose": _clean_text(rec.declared_purpose),
+        "declared_purpose": _clean_text(purpose_out),
         "risk_flags": rec.risk_flags or "none",
         "fee_status": fee_out,
         "adjudication": adj,

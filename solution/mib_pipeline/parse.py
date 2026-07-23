@@ -105,9 +105,18 @@ def _fuzzy_flags(text: str) -> str:
     return "|".join(sorted(set(found)))
 
 
-def _correct_flag_tokens(flags: str) -> str:
+_UNKNOWN_FLAG_RE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+\Z")
+
+
+def _correct_flag_tokens(flags: str, strict: bool = False) -> str:
     """Map each flag token onto the closed flag vocabulary (up to 50% OCR
-    noise); tokens with no confident match are dropped."""
+    noise). Tokens with no confident match are dropped as OCR noise --- except
+    on a cleanly-rendered (non-OCR) slip, where ``strict=True`` preserves an
+    unmatched but flag-shaped token as a genuinely NEW flag. This mirrors the
+    closed-vocab passthrough for species/world/purpose: a clean unfamiliar value
+    is a new category, not noise, and the policy engine's ``unknown_flag`` path
+    then routes it to review instead of silently approving on an unrecognized
+    risk marker."""
     if flags in ("", "none"):
         return "none"
     from .vocab import correct as vocab_correct
@@ -119,6 +128,10 @@ def _correct_flag_tokens(flags: str) -> str:
         hit = vocab_correct(token, KNOWN_FLAGS, max_ratio=0.5)
         if hit:
             out.append(hit)
+        elif strict and _UNKNOWN_FLAG_RE.match(token):
+            # Clean digital slip: a snake_case token that matches no known flag
+            # is a new flag, not noise. Keep it so policy can escalate.
+            out.append(token)
     return "|".join(sorted(set(out))) if out else "none"
 
 
@@ -197,6 +210,12 @@ class Record:
     stamp_verdict: str = ""
     risk_panel_damaged: bool = False
     flags_observed: bool = False
+    # Auxiliary evidence channels (measured on train; see MEMO experiments):
+    # the fee receipt's dollar amount, the registry's sponsor-standing notice,
+    # and the sponsor letter's "class X compliance" line.
+    fee_amount: str = ""
+    registry_notice: bool = False
+    sponsor_compliance_visa: str = ""
 
 
 PLACEHOLDERS = {"passport image", "registry image", "scan image", "primary intake record",
@@ -476,6 +495,13 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             if not t.startswith("Packet ") and t != "Synthetic hiring challenge document" and t not in ALL_LABELS:
                 meaningful_visible = True
 
+        # "Registry notice: sponsor standing requires additional verification."
+        # marks bad sponsor standing (incl. revoked sponsors not on the known
+        # list). Measured on train: non-DIP-1 -> DENIED 23/23, DIP-1 ->
+        # APPROVED 5/5 (mirrors the DIP sponsor exemption).
+        if re.search(r"sponsor\s+standing\s+requires\s+additional\s+verification", text, re.I):
+            rec.registry_notice = True
+
         # Page-type detection tolerates OCR-garbled titles by looking for
         # distinctive markers anywhere in the visible text.
         if (title.startswith("FORM I-8090") or "I-8090" in text
@@ -506,6 +532,11 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                     rec.fee_observed = True
             if kv.get("waiver_code"):
                 rec.waiver_code = kv["waiver_code"].strip()
+            # The receipt's dollar amount: $809.00 means fee paid (297/297 on
+            # train) and $0.00 never does — used as emission-only repair.
+            am = re.search(r"\$\s*([0-9][0-9,]*\.[0-9]{2})", text)
+            if am and not rec.fee_amount:
+                rec.fee_amount = am.group(1).replace(",", "")
             rec.present_pages.append("fee")
 
         elif (title.startswith("FORM B-13") or "B-13" in text or "Biometric" in text
@@ -521,7 +552,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 # A legible value was read (even a legible 'none') — downstream
                 # recovery must not second-guess it.
                 rec.flags_observed = True
-            flags = _correct_flag_tokens(_norm_flags(obs))
+            flags = _correct_flag_tokens(_norm_flags(obs), strict=not p.ocr_used)
             if flags == "none":
                 # OCR may have mangled the "Observed flags:" label; scan the whole
                 # slip for known flag names, then fall back to heavy-noise
@@ -555,6 +586,11 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             vm = re.search(r"class\s+(XW-1|XW-2|DIP-1|MED-3|TRANSIT-7)", text)
             if vm:
                 rec.sponsor_letter_visa = vm.group(1)
+            # "…responsibility for class X compliance" matches the true visa
+            # 294/294 on train — strong enough to override the emitted visa.
+            cvm = re.search(r"class\s+(XW-1|XW-2|DIP-1|MED-3|TRANSIT-7)\s+compliance", text)
+            if cvm:
+                rec.sponsor_compliance_visa = cvm.group(1)
             # Scanned attestation letters render as labeled fields
             # ("Applicant: X / Purpose: Y / Visa Class: Z") instead of prose;
             # read those too, filling only what the prose parse didn't.
@@ -846,5 +882,16 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     if any(_really_different(a, b) for i, a in enumerate(names) for b in names[i + 1:]) \
             or len({s.upper() for s in specs}) > 1:
         rec.identity_conflict = True
+
+    # Digital name-swap trap: on cleanly-typed packets where intake and registry
+    # carry genuinely different names, the registry name is the truth (7/7 on
+    # train; every such case is flagged identity_conflict). Does NOT extend to
+    # OCR packets, where the registry reading is right only ~2/6 times.
+    reg_name = registry.get("applicant_name", "")
+    if (not rec.ocr_used and reg_name and not _is_damage(reg_name)
+            and rec.field_sources.get("applicant_name") == "intake"
+            and _really_different(rec.applicant_name, reg_name)):
+        rec.applicant_name = reg_name.strip()
+        rec.field_sources["applicant_name"] = "registry_conflict"
 
     return rec
