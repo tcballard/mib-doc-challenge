@@ -81,11 +81,11 @@ REASON_CONFIDENCE = {
     "unknown_flag": 0.60,
     "approve_nobio_ocr": 0.34,
     "fee_unknown": 0.98,
-    "missing_arrival_date": 0.35,
+    "missing_arrival_date": 0.29,
     "review_flag": 0.90,
     "identity_conflict": 0.44,
     "unsupported_waiver": 0.50,
-    "incomplete_evidence": 0.27,
+    "incomplete_evidence": 0.17,
     "clean_approved": 0.68,
     "approved_dip": 0.87,
 }
