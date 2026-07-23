@@ -56,6 +56,14 @@ def _edit_distance(a: str, b: str, cap: int = 4) -> int:
     return prev[-1]
 
 
+_FOLD = str.maketrans({"0": "o", "1": "l", "5": "s", "8": "b", "q": "o"})
+
+
+def _fold(s: str) -> str:
+    """Collapse classic OCR confusions (rn~m, 0~o, 1~l...) for comparison."""
+    return s.replace("rn", "m").translate(_FOLD)
+
+
 def correct(value: str, vocabulary: Iterable[str], max_ratio: float = 0.34) -> Optional[str]:
     """Return the vocabulary entry ``value`` most plausibly is, or None.
 
@@ -70,7 +78,8 @@ def correct(value: str, vocabulary: Iterable[str], max_ratio: float = 0.34) -> O
     for entry in vocabulary:
         e = _canon(entry)
         cap = max(1, int(len(e) * max_ratio))
-        d = _edit_distance(v, e, cap=cap + 1)
+        d = min(_edit_distance(v, e, cap=cap + 1),
+                _edit_distance(_fold(v), _fold(e), cap=cap + 1))
         if d <= cap:
             scored.append((d, entry))
     if not scored:
@@ -116,6 +125,6 @@ def correct_field(field: str, value: str, strict: bool = False) -> str:
     # (e.g. 'Wolf-1061c' with a broken glyph), never a neighboring designator
     # like 'Wolf-1062d' — that's a different world.
     if field == "home_world" and _canon(fixed) in _EMBARGO_CANON:
-        if _edit_distance(_canon(value), _canon(fixed), cap=2) > 1:
+        if _edit_distance(_fold(_canon(value)), _fold(_canon(fixed)), cap=2) > 1:
             return value
     return fixed

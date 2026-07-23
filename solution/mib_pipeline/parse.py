@@ -75,9 +75,25 @@ KNOWN_FLAGS = [
 ]
 
 
+_DAMAGE_PHRASES = ["name cut out", "species whiteout", "risk panel missing",
+                   "date washed out", "visa class torn", "registry lost",
+                   "purpose illegible", "sponsor id blank", "unreadable"]
+
+
 def _is_damage(v: str) -> bool:
     v = (v or "").strip()
-    return bool(DAMAGE_RE.match(v) or DAMAGE_WORDS.search(v))
+    if not v:
+        return False
+    if v.startswith("[") or v.endswith("]"):
+        return True  # bracketed markers survive OCR with mangled interiors
+    if DAMAGE_RE.match(v) or DAMAGE_WORDS.search(v):
+        return True
+    # OCR-garbled marker text ('SPECIES WHITEQUT') within 2 edits of a phrase.
+    from .vocab import _canon, _edit_distance
+    cv = _canon(v)
+    return any(abs(len(cv) - len(_canon(ph))) <= 3
+               and _edit_distance(cv, _canon(ph), cap=3) <= 2
+               for ph in _DAMAGE_PHRASES)
 
 
 def _fuzzy_flags(text: str) -> str:
@@ -174,6 +190,7 @@ class Record:
     scanned: bool = False
     identity_conflict: bool = False
     stamp_verdict: str = ""
+    risk_panel_damaged: bool = False
 
 
 PLACEHOLDERS = {"passport image", "registry image", "scan image", "primary intake record",
@@ -486,6 +503,9 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             inl = _kv_inline(vis)
             biometric = inl
             obs = inl.get("Observed flags", "")
+            if _is_damage(obs):
+                # The risk panel itself is destroyed: flags are unverifiable.
+                rec.risk_panel_damaged = True
             flags = _correct_flag_tokens(_norm_flags(obs))
             if flags == "none":
                 # OCR may have mangled the "Observed flags:" label; scan the whole

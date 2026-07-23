@@ -210,6 +210,11 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
     # flag recovery — now drain those denials out before reaching this point,
     # and the measured expected score of approving exceeds review on both the
     # digital and OCR halves of the bucket.)
+    # A destroyed risk panel means the flags are unverifiable: never approve on
+    # an unreadable risk check (denial paths above are unaffected).
+    if rec.risk_panel_damaged:
+        return "NEEDS_REVIEW", _conf("approve_nobio_ocr"), "risk_panel_damaged"
+
     # An OCR-parsed packet with no recognizable biometric slip may be hiding an
     # unreadable flag (measured subgroup: review beats approve on expected
     # value); route to review instead of approving on incomplete risk evidence.
