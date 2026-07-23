@@ -38,8 +38,10 @@ def _whitelist_ocr(img, whitelist: str) -> str:
 
 
 def _render_binarized(page, dpi: int = 300, threshold: int = 120):
-    pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), colorspace=fitz.csGRAY)
-    img = Image.open(io.BytesIO(pix.tobytes("png")))
+    # Reuse the OCR module's render path so orientation repair and deskew apply
+    # here too — whitelist re-OCR was previously blind on rotated pages.
+    from .ocr import _render, _detect_orientation
+    img = _render(page, dpi, orient=_detect_orientation(page))
     return img.point(lambda v: 255 if v > threshold else 0)
 
 
