@@ -129,7 +129,22 @@ def _flag_vote(value_text: str, votes: dict) -> None:
             votes[f] += 1
 
 
-_OBS_WORD_RE = re.compile(r"(observed|obs[a-z]{0,5})\s+\S*fla?g?[a-z]{0,3}[:.\s]?\s*(.*)", re.I)
+def _obs_line_value(ln: str):
+    """Fuzzy 'Observed flags' line matcher: first word within edit distance 3
+    of 'observed', second within 2 of 'flags' (per measured recipe — regex
+    prefixes miss reads like 'Cieerved flags. ...'). Returns the value tail or
+    None."""
+    from .vocab import _canon, _edit_distance
+    words = ln.split()
+    if len(words) < 2:
+        return None
+    w1, w2 = _canon(words[0]), _canon(words[1].rstrip(":."))
+    if not w1 or not w2:
+        return None
+    if (_edit_distance(w1, "observed", cap=4) <= 3
+            and _edit_distance(w2, "flags", cap=3) <= 2):
+        return " ".join(words[2:])
+    return None
 
 
 def recover_risk_flags(rec: Record, pdf_path: str) -> None:
@@ -145,7 +160,6 @@ def recover_risk_flags(rec: Record, pdf_path: str) -> None:
     except Exception:
         return
     votes: dict = {}
-    slip_seen = False
     try:
         from .ocr import _render, _detect_orientation
         for pno in range(doc.page_count):
@@ -162,14 +176,15 @@ def recover_risk_flags(rec: Record, pdf_path: str) -> None:
                         img, config="--oem 1 --psm 6", timeout=TIMEOUT_S)
                 except Exception:
                     continue
-                low = text.lower()
-                if "b-13" in low or "biometric" in low or "blometic" in low or "biometic" in low:
-                    slip_seen = True
                 for ln in text.splitlines():
-                    m = _OBS_WORD_RE.search(ln)
-                    if m:
+                    val = _obs_line_value(ln)
+                    if val is not None:
                         page_hit = True
-                        _flag_vote(m.group(2), votes)
+                        from .vocab import _canon as _cn
+                        if _cn(val) in ("none", "nome", "norne", "mone"):
+                            # A readable 'none': trust it, stop entirely.
+                            return
+                        _flag_vote(val, votes)
             if page_hit and votes:
                 break
     finally:
@@ -182,9 +197,5 @@ def recover_risk_flags(rec: Record, pdf_path: str) -> None:
             rec.risk_flags = "|".join(accepted)
             rec.field_sources["risk_flags"] = "flag_cascade"
             return
-    # Unreadable-slip inference: a slip exists but its flags never became
-    # legible under any variant — the dominant truth for such slips is
-    # illegible_biometrics (legible slips print a readable 'none').
-    if slip_seen and "biometric" in rec.present_pages:
-        rec.risk_flags = "illegible_biometrics"
-        rec.field_sources["risk_flags"] = "illegible_inference"
+    # (An unreadable-slip inference heuristic was measured at 7 right / 40
+    # wrong on train and removed: silence is not evidence of illegibility.)
