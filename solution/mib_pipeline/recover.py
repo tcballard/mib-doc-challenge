@@ -45,6 +45,56 @@ def _render_binarized(page, dpi: int = 300, threshold: int = 120):
     return img.point(lambda v: 255 if v > threshold else 0)
 
 
+_LABEL_TARGETS = {
+    "sponsor": ("sponsor_id", "SPN-0123456789 "),
+    "arrival": ("arrival_date", "-0123456789 "),
+    "applicant": ("applicant_name", None),
+}
+
+
+def _roi_reocr(page, img, want_fields):
+    """Label-anchored region re-OCR: find a field label's word box via
+    image_to_data, crop the value region to its right, upscale 3x, and read it
+    with a single-line pass (whitelisted for typed fields). The precision
+    version of whole-page whitelist salvage."""
+    from .vocab import _canon, _edit_distance
+    out = {}
+    try:
+        data = pytesseract.image_to_data(
+            img, config="--oem 1 --psm 6", timeout=TIMEOUT_S,
+            output_type=pytesseract.Output.DICT)
+    except Exception:
+        return out
+    n = len(data.get("text", []))
+    for i in range(n):
+        word = _canon(data["text"][i] or "")
+        if len(word) < 5:
+            continue
+        for anchor, (fld, whitelist) in _LABEL_TARGETS.items():
+            if fld not in want_fields or fld in out:
+                continue
+            if _edit_distance(word, anchor, cap=3) > 2:
+                continue
+            x, y, w, h = (data["left"][i], data["top"][i],
+                          data["width"][i], data["height"][i])
+            box = (x + w, max(0, y - 6), min(img.width, x + w + int(img.width * 0.55)),
+                   min(img.height, y + h + 8))
+            if box[2] - box[0] < 20 or box[3] - box[1] < 8:
+                continue
+            crop = img.crop(box)
+            crop = crop.resize((crop.width * 3, crop.height * 3))
+            cfg = "--oem 1 --psm 7"
+            if whitelist:
+                cfg += f' -c tessedit_char_whitelist="{whitelist}"'
+            try:
+                val = pytesseract.image_to_string(crop, config=cfg, timeout=TIMEOUT_S).strip()
+            except Exception:
+                continue
+            if val:
+                out[fld] = val
+    return out
+
+
 def recover_missing_fields(rec: Record, pdf_path: str) -> None:
     """Fill still-missing sponsor_id / arrival_date / species_code via
     whitelist OCR over the packet's image pages. Mutates ``rec`` in place."""
@@ -92,6 +142,28 @@ def recover_missing_fields(rec: Record, pdf_path: str) -> None:
                         rec.field_sources["species_code"] = "whitelist_ocr"
                         need_species = False
                         break
+            # Precision stage: label-anchored region re-OCR for what remains.
+            if need_sponsor or need_date:
+                if img is None:
+                    img = _render_binarized(page)
+                want = set()
+                if need_sponsor:
+                    want.add("sponsor_id")
+                if need_date:
+                    want.add("arrival_date")
+                roi = _roi_reocr(page, img, want)
+                if need_sponsor and "sponsor_id" in roi:
+                    m = SPN_RE.search(roi["sponsor_id"].replace(" ", ""))
+                    if m:
+                        rec.sponsor_id = f"SPN-{m.group(1)}"
+                        rec.field_sources["sponsor_id"] = "whitelist_ocr"
+                        need_sponsor = False
+                if need_date and "arrival_date" in roi:
+                    dm = DATE_RE.search(roi["arrival_date"].replace(" ", ""))
+                    if dm and _valid_date(dm.group(1)):
+                        rec.arrival_date = dm.group(1)
+                        rec.field_sources["arrival_date"] = "whitelist_ocr"
+                        need_date = False
             if not (need_sponsor or need_date or need_species):
                 break
     finally:
