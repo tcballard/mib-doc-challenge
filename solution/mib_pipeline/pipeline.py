@@ -81,8 +81,11 @@ def parse_one(path: str, use_ocr: bool = True, allow_escalation: bool = True) ->
     if not m:
         from collections import Counter as _C
         ids = _C()
+        from .parse import INJECTION_RE
         for pg in pages:
             for ln in pg.visible_lines:
+                if INJECTION_RE.search(ln):
+                    continue
                 for hm in CASE_ID_RE.finditer(ln):
                     ids[hm.group(0)] += 1
         if ids:

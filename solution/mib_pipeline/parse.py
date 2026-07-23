@@ -173,6 +173,7 @@ class Record:
     ocr_used: bool = False
     scanned: bool = False
     identity_conflict: bool = False
+    stamp_verdict: str = ""
 
 
 PLACEHOLDERS = {"passport image", "registry image", "scan image", "primary intake record",
@@ -496,8 +497,14 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             rec.risk_flags = flags
             if inl.get("Species Match"):
                 biometric["species_code"] = inl["Species Match"]
-            if inl.get("Applicant"):
-                sponsor_names.append(inl["Applicant"])
+            # The slip's "Applicant:" line is trusted evidence for the name —
+            # map it to the field key so consolidation can actually use it
+            # (fuzzy-label fallback covers OCR-noised "Applicant" labels).
+            bio_inline = _inline_fields(vis)
+            bname = inl.get("Applicant") or bio_inline.get("applicant_name")
+            if bname:
+                sponsor_names.append(bname)
+                biometric.setdefault("applicant_name", bname)
             rec.present_pages.append("biometric")
 
         elif title.startswith("Sponsor Attestation") or "Sponsor Attestation" in text or "attests that" in text:
@@ -513,6 +520,21 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             vm = re.search(r"class\s+(XW-1|XW-2|DIP-1|MED-3|TRANSIT-7)", text)
             if vm:
                 rec.sponsor_letter_visa = vm.group(1)
+            # Scanned attestation letters render as labeled fields
+            # ("Applicant: X / Purpose: Y / Visa Class: Z") instead of prose;
+            # read those too, filling only what the prose parse didn't.
+            sp_inl = _inline_fields(vis)
+            for ln in vis:
+                if ":" in ln:
+                    k, _, v = ln.partition(":")
+                    if _canon_label(k) == "purpose" and v.strip() and not _is_damage(v.strip()):
+                        sp_inl.setdefault("declared_purpose", v.strip())
+            rec.sponsor_letter_name = rec.sponsor_letter_name or sp_inl.get("applicant_name", "")
+            rec.sponsor_letter_purpose = rec.sponsor_letter_purpose or sp_inl.get("declared_purpose", "")
+            if not rec.sponsor_letter_visa and sp_inl.get("visa_class"):
+                svm = VISA_RE.search(_visa_normalize(sp_inl["visa_class"]))
+                if svm:
+                    rec.sponsor_letter_visa = svm.group(1)
             rec.present_pages.append("sponsor")
 
         elif title.startswith("Manual Adjudicator Note") or "Adjudicator Note" in text:
@@ -525,14 +547,47 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
 
     rec.scanned = not meaningful_visible
 
+    # Large colored verdict stamps (measured 162/162 truth-consistent) as an
+    # insurance channel: exact words, exact stamp colors, stamp point sizes.
+    # Blue REVIEW overrides red DENIED (the crossed-out-denial artwork).
+    STAMP_COLORS = {0x008000: "APPROVED", 0xFF0000: "DENIED", 0x0000FF: "NEEDS_REVIEW"}
+    seen_stamps = set()
+    for p in use_pages:
+        for ln in p.lines:
+            if ln.hidden or not (15 <= ln.size <= 25):
+                continue
+            word = ln.text.strip().upper()
+            if word in ("APPROVED", "DENIED", "REVIEW") and ln.color in STAMP_COLORS:
+                seen_stamps.add(STAMP_COLORS[ln.color])
+    if seen_stamps:
+        if "NEEDS_REVIEW" in seen_stamps:
+            rec.stamp_verdict = "NEEDS_REVIEW"
+        elif len(seen_stamps) == 1:
+            rec.stamp_verdict = next(iter(seen_stamps))
+
     # Consolidate identity fields with manual precedence:
     # intake form > biometric > registry (sponsor letter fills names/sponsor).
     def pick(fieldname, *sources):
+        # A damage marker ("[NAME CUT OUT]", "UNREADABLE") or — for dates — a
+        # calendar-invalid OCR garble must not shadow a clean value from a
+        # lower-precedence page; skip past it and keep looking.
+        fallback = ("", "")
         for src_name, d in sources:
             v = d.get(fieldname)
-            if v:
-                rec.field_sources[fieldname] = src_name
-                return v
+            if not v:
+                continue
+            bad = _is_damage(v) or (
+                fieldname == "arrival_date"
+                and not (DATE_RE.search(v) and _valid_date(DATE_RE.search(v).group(1))))
+            if bad:
+                if not fallback[1]:
+                    fallback = (src_name, v)
+                continue
+            rec.field_sources[fieldname] = src_name
+            return v
+        if fallback[1]:
+            rec.field_sources[fieldname] = fallback[0]
+            return fallback[1]
         return ""
 
     sponsor_d = {
@@ -654,14 +709,30 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 rec.field_sources[fld] = "sweep"
                 setattr(rec, fld, swept[fld])
 
+    # Signed manual corrections are precedence-#1 evidence: apply them to the
+    # record itself (policy and emission both see them), outranking any
+    # corroboration vote over the crossed-out original values.
+    cm = SPONSOR_RE.search(rec.corrections.get("sponsor_id", "") or "")
+    if cm:
+        rec.sponsor_id = cm.group(0)
+        rec.field_sources["sponsor_id"] = "correction"
+    vm_c = VISA_RE.search(_visa_normalize(rec.corrections.get("visa_class", "") or ""))
+    if vm_c:
+        rec.visa_class = vm_c.group(1)
+        rec.field_sources["visa_class"] = "correction"
+    if rec.corrections.get("applicant_name"):
+        rec.applicant_name = rec.corrections["applicant_name"].strip()
+        rec.field_sources["applicant_name"] = "correction"
+
     # Trailing OCR junk on names ("Nexix Nexvara . :|") is never part of a name.
-    if rec.applicant_name:
+    if rec.applicant_name and rec.field_sources.get("applicant_name") != "correction":
         rec.applicant_name = re.sub(r"[^A-Za-z)\]]+$", "", rec.applicant_name).strip()
     # If the name came through OCR and the sponsor letter names a near-identical
     # person, the letter's clean rendering wins (same-person variants only —
     # a genuinely different letter name is the sponsor_mismatch trap and must
     # not replace the active applicant).
-    if rec.ocr_used and rec.applicant_name and rec.sponsor_letter_name:
+    if (rec.ocr_used and rec.applicant_name and rec.sponsor_letter_name
+            and rec.field_sources.get("applicant_name") != "correction"):
         from .vocab import _canon, _edit_distance
         a, b = _canon(rec.applicant_name), _canon(rec.sponsor_letter_name)
         tol = max(2, int(0.34 * max(len(a), len(b))))

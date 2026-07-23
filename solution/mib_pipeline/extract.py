@@ -27,6 +27,7 @@ MIN_FONT_SIZE = 6.5    # no legitimate field value in the corpus renders below ~
 class Line:
     text: str
     size: float
+    color: int = 0
     x0: float
     y0: float
     x1: float
@@ -78,6 +79,7 @@ def _page_lines(page) -> List[Line]:
                 continue
             parts = []
             sizes = []
+            colors = []
             any_visible = False
             x0 = y0 = 1e9
             x1 = y1 = -1e9
@@ -95,6 +97,7 @@ def _page_lines(page) -> List[Line]:
                 )
                 parts.append(txt)
                 sizes.append(size)
+                colors.append(color)
                 if not hidden:
                     any_visible = True
                 x0 = min(x0, bbox.x0)
@@ -108,6 +111,7 @@ def _page_lines(page) -> List[Line]:
                 Line(
                     text=text,
                     size=max(sizes) if sizes else 0.0,
+                    color=colors[sizes.index(max(sizes))] if sizes else 0,
                     x0=x0, y0=y0, x1=x1, y1=y1,
                     hidden=not any_visible,
                 )

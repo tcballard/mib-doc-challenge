@@ -128,6 +128,11 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
     if finding in {"APPROVED", "DENIED", "NEEDS_REVIEW"}:
         return finding, _conf("adjudicator_note"), "adjudicator_note"
 
+    # Insurance channel: a large colored verdict stamp (162/162 truth-consistent
+    # on train) stands in when the note is unreadable.
+    if getattr(rec, "stamp_verdict", ""):
+        return rec.stamp_verdict, _conf("adjudicator_note"), "verdict_stamp"
+
     # Scanned packet with no trusted evidence recovered -> cannot trust.
     if rec.scanned and not rec.ocr_used:
         return "NEEDS_REVIEW", _conf("no_trusted_evidence"), "no_trusted_evidence"
