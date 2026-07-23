@@ -27,12 +27,12 @@ MIN_FONT_SIZE = 6.5    # no legitimate field value in the corpus renders below ~
 class Line:
     text: str
     size: float
-    color: int = 0
     x0: float
     y0: float
     x1: float
     y1: float
     hidden: bool
+    color: int = 0
 
 
 @dataclass
