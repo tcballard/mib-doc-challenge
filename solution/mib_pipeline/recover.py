@@ -285,7 +285,7 @@ def recover_risk_flags(rec: Record, pdf_path: str, pages=None, deep: bool = True
             or rec.risk_panel_damaged or rec.flags_observed):
         return
     votes: dict = {}
-    from .ocr import _render, _detect_orientation, _legibility
+    from .ocr import _render, _detect_orientation, _legibility, ocr_text
 
     # Stage 1: free text-first scan of everything already read.
     if pages:
@@ -318,8 +318,7 @@ def recover_risk_flags(rec: Record, pdf_path: str, pages=None, deep: bool = True
             for th in ((80, 120, 140, 160, 180) if deep else (120, 140, 160)):
                 img = base.point(lambda v, t=th: 255 if v > t else 0)
                 try:
-                    text = pytesseract.image_to_string(
-                        img, config="--oem 1 --psm 6", timeout=TIMEOUT_S)
+                    text = ocr_text(img, "--oem 1 --psm 6", TIMEOUT_S)
                 except Exception:
                     continue
                 r = _scan_text_for_flags(text.splitlines(), votes)
@@ -336,8 +335,7 @@ def recover_risk_flags(rec: Record, pdf_path: str, pages=None, deep: bool = True
             if not page_hit:
                 # Sparse mode: free-floating words when layout analysis fails.
                 try:
-                    text = pytesseract.image_to_string(
-                        base, config="--oem 1 --psm 11", timeout=TIMEOUT_S)
+                    text = ocr_text(base, "--oem 1 --psm 11", TIMEOUT_S)
                     r = _scan_text_for_flags(text.splitlines(), votes)
                     if r == "none":
                         return

@@ -6,6 +6,7 @@ literally the rendered page), unlike the hidden PDF text layer.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 from typing import List
 
@@ -57,7 +58,7 @@ def _estimate_skew(img) -> float:
 # found 455/667 pixmap renders and 146/251 OSD calls were exact repeats
 # (~15% of OCR wall-clock). One document is cached at a time, so memory stays
 # bounded to a single packet's pages and resets when the next packet arrives.
-_MEMO = {"name": None, "renders": {}, "osd": {}}
+_MEMO = {"name": None, "renders": {}, "osd": {}, "texts": {}}
 
 
 def _memo_for(page):
@@ -66,7 +67,29 @@ def _memo_for(page):
         _MEMO["name"] = name
         _MEMO["renders"] = {}
         _MEMO["osd"] = {}
+        _MEMO["texts"] = {}
     return _MEMO
+
+
+def ocr_text(img, config, timeout):
+    """Run tesseract, reusing the answer for an image+config already read.
+
+    The escalation ladder and the risk-flag recovery cascade both threshold the
+    same memoized render at the same levels, so on escalated packets 4-8 calls
+    per packet were byte-for-byte repeats (~1.7s each packet, 5% of runtime).
+    Keyed on the raw pixel bytes, so a hit is identical input by construction.
+    Failures are never cached: tesseract timeouts are nondeterministic and must
+    stay retryable. The key deliberately omits the timeout, which differs by two
+    seconds between the two callers — a hit can only occur for a call that
+    already finished, and no profiled call came within 10s of either limit.
+    """
+    key = (hashlib.md5(img.tobytes()).hexdigest(), img.size, config)
+    texts = _MEMO["texts"]
+    if key in texts:
+        return texts[key]
+    text = pytesseract.image_to_string(img, config=config, timeout=timeout)
+    texts[key] = text
+    return text
 
 
 def _pix_to_image(pix):
@@ -257,8 +280,7 @@ def _escalation_variants(page, skip_segment: bool = False, deep: bool = True):
 
     def run(img, psm):
         try:
-            text = pytesseract.image_to_string(
-                img, config=f"--oem 1 --psm {psm}", timeout=PAGE_TIMEOUT_S)
+            text = ocr_text(img, f"--oem 1 --psm {psm}", PAGE_TIMEOUT_S)
             return [s.strip() for s in text.splitlines() if s.strip()]
         except Exception:
             return []
