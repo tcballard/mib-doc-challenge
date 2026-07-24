@@ -1,14 +1,14 @@
 # Submission — tcballard
 
-**Solution repository:** https://github.com/tcballard/mib-doc-challenge (branch
-`claude/challenge-solution-8jh06w`), directory [`solution/`](../../solution).
+**Solution repository:** https://github.com/tcballard/mib-doc-challenge
+(`main` branch), solution code under `solution/`, `Dockerfile` at the
+repository root.
 
-The solution is self-contained in this repository under `solution/`, which
-includes a `Dockerfile`. The built image runs fully offline (no network, CPU
-only, no GPU) and accepts exactly the required two arguments:
+The built image runs fully offline (no network, CPU only, no GPU) and
+accepts exactly the required two arguments:
 
 ```bash
-docker build -t mib-submission solution/
+docker build -t mib-submission .
 docker run --rm --network none \
   --mount type=bind,src=/path/to/pdfs,dst=/input,readonly \
   --mount type=bind,src=/path/to/output,dst=/output \
