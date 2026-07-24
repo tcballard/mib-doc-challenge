@@ -306,18 +306,28 @@ def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
 
 
 def batch_reference_date(records: List[Record]) -> Optional[datetime.date]:
-    """Most recent *plausible* arrival date in the batch.
+    """Reference "packet receipt" date for the batch, from its arrival dates.
 
     OCR digit noise can fabricate far-future dates (e.g. 2076-05-03) that would
     make every real application look stale, so dates more than a year past the
     batch median are treated as misreads and excluded.
+
+    Taking the *maximum* of what survives is still too fragile: on train a
+    single one-character month misread sat inside the plausibility window and
+    anchored the whole staleness ladder two months late by itself. A max is
+    decided by one record no matter how large the batch, so the exposure grows
+    with corpus size rather than averaging out. The 99th percentile plus a
+    month is the same date on clean input but needs a whole tail of bad reads
+    to move, not one.
     """
     dates = sorted(d for r in records if (d := _parse_date(r.arrival_date)))
     if not dates:
         return None
     median = dates[len(dates) // 2]
     plausible = [d for d in dates if (d - median).days <= 366]
-    return max(plausible) if plausible else median
+    if not plausible:
+        return median
+    return plausible[min(len(plausible) - 1, int(0.99 * len(plausible)))] + datetime.timedelta(days=30)
 
 
 def process_pdf(path: str, use_ocr: bool = True, now: Optional[datetime.date] = None) -> Optional[Dict]:
