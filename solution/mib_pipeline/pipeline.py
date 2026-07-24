@@ -67,11 +67,14 @@ def _clean_text(v: str) -> str:
     return v if v else "unknown"
 
 
-def parse_one(path: str, use_ocr: bool = True, allow_escalation: bool = True) -> Record:
+def parse_one(path: str, use_ocr: bool = True, allow_escalation: bool = True,
+              deep: bool = True) -> Record:
     """Extract + parse a single PDF into a Record (no adjudication).
 
-    ``allow_escalation=False`` is the budget governor's degraded mode: cheap
-    layers only, used when the batch is pacing over the runtime budget.
+    Two-tier degradation for the budget governor: ``deep=False`` sheds the
+    tier-2 depth (reinvestment rungs, lowered trigger, extended flag sweep)
+    while keeping the proven ladder; ``allow_escalation=False`` sheds all
+    escalation — cheap layers only.
     """
     case_id = Path(path).stem
     m = CASE_ID_RE.search(case_id)
@@ -95,12 +98,19 @@ def parse_one(path: str, use_ocr: bool = True, allow_escalation: bool = True) ->
     # Escalation layer ("onion" architecture): the cheap layers handle most
     # packets in well under budget; packets they leave deficient get a second,
     # much heavier OCR sweep, and the two parses merge field-wise.
-    if use_ocr and allow_escalation and rec.ocr_used and (_deficiency(rec) >= 3 or _critical_gap(rec)):
+    # Trigger lowered from deficiency>=3 to >=2: the pruned+seeded ladder is
+    # ~4x cheaper per fire, so single-critical-gap packets that used to ship
+    # deficient now get it (train A/B gated).
+    final_pages = pages
+    deficiency_bar = 2 if deep else 3
+    if use_ocr and allow_escalation and rec.ocr_used and (
+            _deficiency(rec) >= deficiency_bar or _critical_gap(rec, pages)):
         try:
             from .ocr import make_escalated_ocr_fn
-            pages2 = extract_pages(path, ocr_fn=make_escalated_ocr_fn(base_pages=pages))
+            pages2 = extract_pages(path, ocr_fn=make_escalated_ocr_fn(base_pages=pages, deep=deep))
             rec2 = parse_packet(case_id, pages2)
             rec = _merge_records(rec, rec2)
+            final_pages = pages2
         except Exception:
             pass
 
@@ -108,7 +118,7 @@ def parse_one(path: str, use_ocr: bool = True, allow_escalation: bool = True) ->
         try:
             from .recover import recover_missing_fields, recover_risk_flags
             recover_missing_fields(rec, path)
-            recover_risk_flags(rec, path)
+            recover_risk_flags(rec, path, pages=final_pages, deep=deep)
         except Exception:
             pass
     return rec
@@ -118,11 +128,17 @@ CORE_FIELDS = ("applicant_name", "species_code", "home_world", "visa_class",
                "sponsor_id", "arrival_date", "declared_purpose")
 
 
-def _critical_gap(rec: Record) -> bool:
+def _critical_gap(rec: Record, pages=None) -> bool:
     """A single missing item that likely swings the verdict outweighs several
     peripheral fields: escalate on value, not just volume."""
-    if (rec.risk_flags or "none") == "none" and "biometric" not in rec.present_pages:
-        return True  # a hidden disqualifying flag flips APPROVED to DENIED (-4 vs +8)
+    # An OCR page whose base pass read *nothing legible* is direct evidence of
+    # unread content — escalate. (The previous trigger — "no flags and no
+    # recognized biometric page" — fired on 47% of OCR packets at ~4.8s CPU
+    # each for 1 non-scoring outcome in 19; mere absence is not evidence.)
+    if pages is not None:
+        from .ocr import _legibility
+        if any(p.ocr_used and _legibility(p.visible_lines) == 0 for p in pages):
+            return True
     if rec.note and rec.note.raw and not rec.note.finding:
         return True  # an unparsed adjudicator finding is worth 8 points alone
     return False
@@ -164,13 +180,13 @@ def _merge_records(a: Record, b: Record) -> Record:
 
 
 def _worker(path):
-    return _worker_mode((path, True))
+    return _worker_mode((path, True, True))
 
 
 def _worker_mode(args):
-    path, allow_escalation = args
+    path, allow_escalation, deep = args
     try:
-        return parse_one(path, allow_escalation=allow_escalation)
+        return parse_one(path, allow_escalation=allow_escalation, deep=deep)
     except Exception:
         # Never let one bad PDF kill the batch.
         m = CASE_ID_RE.search(Path(path).stem)
@@ -361,8 +377,13 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
     todo = [p for p in pdfs if Path(p).stem not in done]
 
     total_budget = BUDGET_S_PER_PDF * len(pdfs) * BUDGET_SAFETY
+    # Tier-2 depth sheds first (at 0.72x the raw contract = 0.9x total_budget),
+    # full escalation second (at 0.80x = total_budget): a two-step degradation
+    # instead of one cliff.
+    tier2_budget = BUDGET_S_PER_PDF * len(pdfs) * 0.72
     start = time.monotonic()
     allow_escalation = True
+    deep = True
     processed_this_run = 0
 
     import multiprocessing as mp
@@ -370,7 +391,7 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
     try:
         for i in range(0, len(todo), BATCH_SIZE):
             batch = todo[i:i + BATCH_SIZE]
-            args = [(p, allow_escalation) for p in batch]
+            args = [(p, allow_escalation, deep) for p in batch]
             if workers > 1 and len(batch) > 1:
                 with mp.Pool(processes=workers) as pool:
                     batch_recs = list(pool.imap_unordered(_worker_mode, args, chunksize=4))
@@ -396,6 +417,8 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
                 projected = elapsed + (elapsed / processed_this_run) * remaining
                 if projected > total_budget:
                     allow_escalation = False
+                elif projected > tier2_budget:
+                    deep = False
     finally:
         ckpt_f.close()
 

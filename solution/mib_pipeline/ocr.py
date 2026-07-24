@@ -172,13 +172,14 @@ def _legibility(lines: List[str]) -> int:
 
 
 def ocr_page_lines(page) -> List[str]:
-    """OCR a page: quadrant-orientation detection first (cheap; 15% of scanned
-    pages are rotated and defeat everything downstream), then both segmentation
-    passes, then a binarized pass when yield is weak in *quantity or quality*.
+    """OCR a page: first segmentation pass upright, orientation detection only
+    when that pass reads nothing legible (OSD costs ~0.4s/page and detected
+    zero rotations across a 251-call profile — a rotated page already fails
+    the upright pass, so lazy OSD is cost-neutral for it), then the second
+    pass, then a binarized pass when yield is weak in *quantity or quality*.
     Falls back to a cheap low-DPI pass if everything is empty."""
     if not _OCR_OK:
         return []
-    orient = _detect_orientation(page)
     lines: List[str] = []
     seen = set()
 
@@ -188,7 +189,16 @@ def ocr_page_lines(page) -> List[str]:
                 seen.add(ln)
                 lines.append(ln)
 
-    for dpi, psm in PASSES:
+    first_dpi, first_psm = PASSES[0]
+    upright = _ocr_once(page, first_dpi, first_psm, orient=0)
+    orient = 0
+    if _legibility(upright) == 0:
+        orient = _detect_orientation(page)
+    if orient:
+        _absorb(_ocr_once(page, first_dpi, first_psm, orient=orient))
+    else:
+        _absorb(upright)
+    for dpi, psm in PASSES[1:]:
         _absorb(_ocr_once(page, dpi, psm, orient=orient))
     if (sum(len(l.split()) for l in lines) < WEAK_YIELD_WORDS
             or _legibility(lines) < 3):
@@ -230,7 +240,7 @@ def _ocr_variant(page, dpi: int, psm: int, threshold=None, autocontrast=False) -
     return [s.strip() for s in text.splitlines() if s.strip()]
 
 
-def _escalation_variants(page, skip_segment: bool = False):
+def _escalation_variants(page, skip_segment: bool = False, deep: bool = True):
     """Ordered ladder of increasingly aggressive read attempts for a page the
     cheap layers couldn't crack. Yields (family, line-list) so the stopping
     rule can distinguish technique families.
@@ -253,28 +263,47 @@ def _escalation_variants(page, skip_segment: bool = False):
         except Exception:
             return []
 
+    # Rungs ordered by measured outcomes-per-second on train (progressive-
+    # inclusion attribution over 30 fired packets, 13/13 outcomes attributed).
+    # Dropped as zero-outcome in 546s of measured ladder time: segment x2
+    # (byte-identical to the base pass), thr100_p6, contrast_p4, denoise_p4.
     if not skip_segment:
+        # Only reachable when the base pass wasn't seeded (direct callers in
+        # tests/experiments); the pipeline always seeds.
         yield "segment", run(base, 4)
         yield "segment", run(base, 6)
-    for th in ESCALATION_THRESHOLDS:
-        yield "threshold", run(base.point(lambda v, t=th: 255 if v > t else 0), 4)
-    for th in ESCALATION_THRESHOLDS:
-        yield "threshold6", run(base.point(lambda v, t=th: 255 if v > t else 0), 6)
-    yield "contrast", run(ImageOps.autocontrast(base, cutoff=2), 4)
+
+    def thr(t):
+        return base.point(lambda v, _t=t: 255 if v > _t else 0)
+
     # Sparse-text mode: recovers free-floating words when layout analysis fails.
     yield "sparse", run(base, 11)
-    # Denoise then binarize: beats salt-and-pepper speckle.
-    den = base.filter(ImageFilter.MedianFilter(3))
-    yield "denoise", run(ImageOps.autocontrast(den, cutoff=2).point(lambda v: 255 if v > 130 else 0), 4)
-    # Upscale for small/blurry type.
+    yield "threshold6", run(thr(140), 6)
+    yield "threshold", run(thr(100), 4)
+    yield "threshold", run(thr(140), 4)
+    # Upscale for small/blurry type (1 outcome/104s: poor but real).
     up = base.resize((base.width * 2, base.height * 2))
     yield "upscale", run(up.point(lambda v: 255 if v > BINARIZE_THRESHOLD else 0), 6)
+    # Reinvestment rungs (funded by the pruning above): new binarization
+    # cutoffs — different scans respond to different thresholds — and the
+    # best-performing family (sparse) at higher resolution. Tier-2 depth:
+    # the governor sheds these first when pacing over budget.
+    if not deep:
+        return
+    yield "threshold6", run(thr(80), 6)
+    yield "threshold6", run(thr(160), 6)
+    yield "threshold", run(thr(170), 4)
+    try:
+        base400 = _render(page, 400, orient=orient)
+        yield "sparse400", run(base400, 11)
+    except Exception:
+        pass
 
 
 PACKET_ESCALATION_BUDGET_S = 75.0
 
 
-def make_escalated_ocr_fn(base_pages=None):
+def make_escalated_ocr_fn(base_pages=None, deep: bool = True):
     """OCR function for the escalation pass: works down a ladder of variants,
     stopping once two consecutive rungs *from different technique families*
     contribute nothing new (adjacent same-family rungs are often redundant with
@@ -302,13 +331,17 @@ def make_escalated_ocr_fn(base_pages=None):
         lines: List[str] = list(seeded) if seeded else []
         seen = set(lines)
         dry_families: List[str] = []
-        for family, variant_lines in _escalation_variants(page, skip_segment=bool(seeded)):
+        for family, variant_lines in _escalation_variants(page, skip_segment=bool(seeded), deep=deep):
             new = [ln for ln in variant_lines if ln not in seen]
-            if new:
+            for ln in new:
+                seen.add(ln)
+                lines.append(ln)
+            # A rung is "dry" when it adds nothing *legible* — psm alternation
+            # always yields never-seen-before junk strings, so counting any
+            # new line as progress made the old stop rule dead code (66/67
+            # escalated pages ran the full ladder).
+            if any(_LEGIBLE_PATTERNS.search(ln) for ln in new):
                 dry_families = []
-                for ln in new:
-                    seen.add(ln)
-                    lines.append(ln)
             else:
                 dry_families.append(family)
                 if len(set(dry_families)) >= 2 and lines:

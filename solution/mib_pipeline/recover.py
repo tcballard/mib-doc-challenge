@@ -221,55 +221,134 @@ def _obs_line_value(ln: str):
     return None
 
 
-def recover_risk_flags(rec: Record, pdf_path: str) -> None:
-    """Fallback flag recovery for OCR packets whose slip resisted the standard
-    ladder: psm-6 threshold sweep with a separator-tolerant flags-line matcher,
-    ROI rescue of the flags line, and a bounded unreadable-slip inference.
+_ANCHOR_WORDS = ("observed", "flags", "biometric")
+
+
+def _page_has_anchor(lines) -> bool:
+    """Fuzzy slip-layout detector: any word within edit distance 2 of the
+    slip's anchor vocabulary anywhere in the page's lines."""
+    from .vocab import _canon, _edit_distance
+    for ln in lines:
+        for w in ln.split():
+            cw = _canon(w)
+            if len(cw) < 4:
+                continue
+            for a in _ANCHOR_WORDS:
+                if _edit_distance(cw, a, cap=3) <= 2:
+                    return True
+    return False
+
+
+def _accept_votes(rec: Record, votes: dict) -> bool:
+    if not votes:
+        return False
+    # Require corroboration for disqualifying flags read at the loose cap.
+    accepted = sorted(f for f, n in votes.items()
+                      if n >= 2 or f not in _DISQUALIFYING)
+    if accepted:
+        rec.risk_flags = "|".join(accepted)
+        rec.field_sources["risk_flags"] = "flag_cascade"
+        return True
+    return False
+
+
+def _scan_text_for_flags(lines, votes: dict):
+    """Run the flags-line matcher over lines; returns 'none' when a readable
+    literal none was found, True on any flags-line hit, else False."""
+    from .vocab import _canon as _cn
+    hit = False
+    for ln in lines:
+        val = _obs_line_value(ln)
+        if val is not None:
+            hit = True
+            if _cn(val) in ("none", "nome", "norne", "mone"):
+                return "none"
+            _flag_vote(val, votes)
+    return hit
+
+
+def recover_risk_flags(rec: Record, pdf_path: str, pages=None, deep: bool = True) -> None:
+    """Targeted flag hunt for OCR packets whose slip resisted the standard
+    ladder. Order of attack (measured recipe, round-4 rebuild):
+
+    1. Text-first: the flags-line matcher over lines already read by the base
+       and escalation passes — free.
+    2. Candidate pages only: image pages whose existing lines carry a fuzzy
+       slip anchor ('observed'/'flags'/'biometric') or read as fully illegible.
+       The old all-pages sweep burned ~3.3s per image page with 202 of its 364
+       firing packets having true flags 'none' (nothing to find).
+    3. Extended threshold sweep (80-180; different scans respond to different
+       cutoffs) at psm6 plus a sparse psm11 pass, with early exit once a
+       readable flags line is found.
     Never runs when flags were already read."""
     if (not _OK or (rec.risk_flags or "none") != "none"
             or rec.risk_panel_damaged or rec.flags_observed):
         return
+    votes: dict = {}
+    from .ocr import _render, _detect_orientation, _legibility
+
+    # Stage 1: free text-first scan of everything already read.
+    if pages:
+        already = [ln for p in pages for ln in p.visible_lines]
+        r = _scan_text_for_flags(already, votes)
+        if r == "none":
+            return
+        if _accept_votes(rec, votes):
+            return
+        votes = {}
+
     try:
         doc = fitz.open(pdf_path)
     except Exception:
         return
-    votes: dict = {}
     try:
-        from .ocr import _render, _detect_orientation
+        base_lines_by_index = {p.index: list(p.visible_lines) for p in (pages or [])}
         for pno in range(doc.page_count):
             page = doc[pno]
             if not page.get_images():
                 continue
+            known = base_lines_by_index.get(pno, [])
+            # Stage 2 gate: only pages that look like a slip or read as
+            # nothing at all are worth the sweep.
+            if known and not _page_has_anchor(known) and _legibility(known) > 0:
+                continue
             orient = _detect_orientation(page)
             base = _render(page, 300, orient=orient)
             page_hit = False
-            for th in (120, 140, 160):
+            for th in ((80, 120, 140, 160, 180) if deep else (120, 140, 160)):
                 img = base.point(lambda v, t=th: 255 if v > t else 0)
                 try:
                     text = pytesseract.image_to_string(
                         img, config="--oem 1 --psm 6", timeout=TIMEOUT_S)
                 except Exception:
                     continue
-                for ln in text.splitlines():
-                    val = _obs_line_value(ln)
-                    if val is not None:
+                r = _scan_text_for_flags(text.splitlines(), votes)
+                if r == "none":
+                    return
+                if r:
+                    page_hit = True
+                    # Early-exit only once the votes stand on their own: a
+                    # lone disqualifying read still needs a second threshold
+                    # to corroborate before it may deny a case.
+                    if any(n >= 2 or f not in _DISQUALIFYING
+                           for f, n in votes.items()):
+                        break
+            if not page_hit:
+                # Sparse mode: free-floating words when layout analysis fails.
+                try:
+                    text = pytesseract.image_to_string(
+                        base, config="--oem 1 --psm 11", timeout=TIMEOUT_S)
+                    r = _scan_text_for_flags(text.splitlines(), votes)
+                    if r == "none":
+                        return
+                    if r:
                         page_hit = True
-                        from .vocab import _canon as _cn
-                        if _cn(val) in ("none", "nome", "norne", "mone"):
-                            # A readable 'none': trust it, stop entirely.
-                            return
-                        _flag_vote(val, votes)
+                except Exception:
+                    pass
             if page_hit and votes:
                 break
     finally:
         doc.close()
-    if votes:
-        # Require corroboration for disqualifying flags read at the loose cap.
-        accepted = sorted(f for f, n in votes.items()
-                          if n >= 2 or f not in _DISQUALIFYING)
-        if accepted:
-            rec.risk_flags = "|".join(accepted)
-            rec.field_sources["risk_flags"] = "flag_cascade"
-            return
+    _accept_votes(rec, votes)
     # (An unreadable-slip inference heuristic was measured at 7 right / 40
     # wrong on train and removed: silence is not evidence of illegibility.)
