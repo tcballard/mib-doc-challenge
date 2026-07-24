@@ -459,6 +459,10 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     registry: Dict[str, str] = {}
     biometric: Dict[str, str] = {}
     sponsor_names: List[str] = []
+    prov_intake: Dict[str, bool] = {}
+    prov_registry: Dict[str, bool] = {}
+    _pflags = {"bio": False, "sponsor": False}
+    src_ocr: Dict[str, bool] = {}
 
     meaningful_visible = False
 
@@ -510,7 +514,9 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             for k, v in _inline_fields(vis).items():
                 kv.setdefault(k, v)
             for k, v in kv.items():
-                intake.setdefault(k, v)
+                if k not in intake:
+                    intake[k] = v
+                    prov_intake[k] = p.ocr_used
             rec.present_pages.append("intake")
 
         elif title.startswith("Planetary Registry") or "Registry Extract" in text:
@@ -518,7 +524,9 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             for k, v in _inline_fields(vis).items():
                 kv.setdefault(k, v)
             for k, v in kv.items():
-                registry.setdefault(k, v)
+                if k not in registry:
+                    registry[k] = v
+                    prov_registry[k] = p.ocr_used
             rec.present_pages.append("registry")
 
         elif title.startswith("MIB Fee Receipt") or "Fee Receipt" in text:
@@ -544,6 +552,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 or re.search(r"\b[Bb][il1][o0]met[a-z]{0,3}\b", text)):
             inl = _kv_inline(vis)
             biometric = inl
+            _pflags["bio"] = p.ocr_used
             obs = inl.get("Observed flags", "")
             if _is_damage(obs):
                 # The risk panel itself is destroyed: flags are unverifiable.
@@ -574,6 +583,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             rec.present_pages.append("biometric")
 
         elif title.startswith("Sponsor Attestation") or "Sponsor Attestation" in text or "attests that" in text:
+            _pflags["sponsor"] = p.ocr_used
             m = SPONSOR_RE.search(text)
             if m:
                 rec.sponsor_letter_id = m.group(0)
@@ -638,6 +648,17 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
 
     # Consolidate identity fields with manual precedence:
     # intake form > biometric > registry (sponsor letter fills names/sponsor).
+    def _prov_of(src_name, fieldname):
+        if src_name == "intake":
+            return prov_intake.get(fieldname, rec.ocr_used)
+        if src_name == "registry":
+            return prov_registry.get(fieldname, rec.ocr_used)
+        if src_name == "biometric":
+            return _pflags["bio"]
+        if src_name == "sponsor":
+            return _pflags["sponsor"]
+        return rec.ocr_used
+
     def pick(fieldname, *sources):
         # A damage marker ("[NAME CUT OUT]", "UNREADABLE") or — for dates — a
         # calendar-invalid OCR garble must not shadow a clean value from a
@@ -655,9 +676,11 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                     fallback = (src_name, v)
                 continue
             rec.field_sources[fieldname] = src_name
+            src_ocr[fieldname] = _prov_of(src_name, fieldname)
             return v
         if fallback[1]:
             rec.field_sources[fieldname] = fallback[0]
+            src_ocr[fieldname] = _prov_of(fallback[0], fieldname)
             return fallback[1]
         return ""
 
@@ -718,7 +741,23 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             return max(variants, key=variants.count)
         return "".join(Counter(v[i] for v in same).most_common(1)[0][0] for i in range(length))
 
+    def _variant_of(a, b):
+        """True when two readings are the same value seen through OCR noise."""
+        from .vocab import _canon, _edit_distance
+        ca, cb = _canon(a), _canon(b)
+        tol = max(2, int(0.34 * max(len(ca), len(cb))))
+        return _edit_distance(ca, cb, cap=tol) <= tol
+
     def _corroborate(fld, cands):
+        # Provenance gate: a value read from a DIGITAL page is exact, so an
+        # OCR *misreading* of it must never outvote it. The gate is deliberately
+        # limited to that case. When the candidates agree on a wholly different
+        # value the disagreement is not a misread at all — it is the packet
+        # carrying two different identities, and the corroborating majority is
+        # the better evidence there. Character-level variant vs. different value
+        # is the discriminator, using the same same-person tolerance the sponsor
+        # letter override already applies.
+        digital = not src_ocr.get(fld, True)
         cands = [c for c in cands if c and not _is_damage(c)]
         cur = getattr(rec, fld)
         if not cands or not cur:
@@ -726,6 +765,8 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
         counts = Counter(_nzv(c) for c in cands)
         cur_n = counts.get(_nzv(cur), 0)
         best_n, best = max(((n, v) for v, n in counts.items()), default=(0, ""))
+        if digital and best and _variant_of(best, cur):
+            return
         if best_n >= 2 and cur_n <= 1 and best != _nzv(cur):
             for c in cands:  # keep original casing of a corroborated variant
                 if _nzv(c) == best:
@@ -734,7 +775,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                     return
         # No repeated reading: if several near-identical variants disagree only
         # at the character level, take the per-character majority.
-        if best_n == 1 and len(cands) >= 2:
+        if best_n == 1 and len(cands) >= 2 and not digital:
             from .vocab import _canon, _edit_distance
             near = [c for c in cands
                     if _edit_distance(_canon(c), _canon(cur), cap=3) <= max(1, len(_canon(cur)) // 4)]
@@ -752,11 +793,14 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     # first candidate that actually matches the SPN pattern wins (a truthy but
     # unparseable intake reading must not shadow a valid letter/sweep value).
     corr_spn = SPONSOR_RE.search(rec.corrections.get("sponsor_id", "") or "")
-    for cand in ([corr_spn.group(0)] if corr_spn else []) + [
-            intake.get("sponsor_id"), rec.sponsor_letter_id, rec.sponsor_id]:
+    for cand, cand_ocr in ([(corr_spn.group(0), False)] if corr_spn else []) + [
+            (intake.get("sponsor_id"), prov_intake.get("sponsor_id", rec.ocr_used)),
+            (rec.sponsor_letter_id, _pflags["sponsor"]),
+            (rec.sponsor_id, rec.ocr_used)]:
         m = SPONSOR_RE.search(cand or "")
         if m:
             rec.sponsor_id = m.group(0)
+            src_ocr["sponsor_id"] = cand_ocr
             break
     spn_occurrences: List[str] = []
     for p in use_pages:
@@ -802,7 +846,8 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     # person, the letter's clean rendering wins (same-person variants only —
     # a genuinely different letter name is the sponsor_mismatch trap and must
     # not replace the active applicant).
-    if (rec.ocr_used and rec.applicant_name and rec.sponsor_letter_name
+    if (src_ocr.get("applicant_name", rec.ocr_used) and rec.applicant_name
+            and rec.sponsor_letter_name
             and rec.field_sources.get("applicant_name") != "correction"):
         from .vocab import _canon, _edit_distance
         a, b = _canon(rec.applicant_name), _canon(rec.sponsor_letter_name)
