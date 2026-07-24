@@ -249,6 +249,26 @@ def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
     name_words = _clean_text(name_out).split()
     if len(name_words) > 2 and name_words[0].lower() != "unknown":
         name_out = " ".join(name_words[:2])
+        name_words = name_words[:2]
+    # Name tokens come from a closed generator vocabulary (144 first / 144
+    # last, zero unseen tokens across 365 cleanly-typed validation packets):
+    # repair OCR noise by unambiguous nearest-token match (fix 19 / break 0
+    # on train).
+    if len(name_words) == 2:
+        from .vocab import NAME_FIRST, NAME_LAST, _edit_distance
+
+        def _tok_fix(tok, vocab):
+            if tok in vocab:
+                return tok
+            best, bd, second = tok, 99, 99
+            for v in vocab:
+                d = _edit_distance(tok.lower(), v.lower(), cap=4)
+                if d < bd:
+                    second, bd, best = bd, d, v
+                elif d < second:
+                    second = d
+            return best if (bd <= 2 and second > bd) else tok
+        name_out = f"{_tok_fix(name_words[0], NAME_FIRST)} {_tok_fix(name_words[1], NAME_LAST)}"
     from .vocab import HOME_WORLDS, PURPOSES
     world_out = _prefix_truncate(rec.home_world, HOME_WORLDS)
     purpose_out = _prefix_truncate(rec.declared_purpose, PURPOSES)

@@ -128,3 +128,62 @@ def correct_field(field: str, value: str, strict: bool = False) -> str:
         if _edit_distance(_fold(_canon(value)), _fold(_canon(fixed)), cap=2) > 1:
             return value
     return fixed
+
+# Applicant-name token vocabularies, derived from the training labels (see
+# scripts/derive_policy_lists.py): the generator draws every name from a closed
+# set of 144 first / 144 last tokens, and 365 cleanly-typed validation
+# packets contain zero tokens outside this set. Generator vocabulary learned
+# from labeled examples, not per-case answers.
+NAME_FIRST = [
+    "Aridane", "Ariix", "Arikesh", "Arimora", "Arinax", "Ariquell",
+    "Aririx", "Aritari", "Ariul", "Arivara", "Arivoss", "Arizarn",
+    "Ixodane", "Ixoix", "Ixokesh", "Ixomora", "Ixonax", "Ixoquell",
+    "Ixorix", "Ixotari", "Ixoul", "Ixovara", "Ixovoss", "Ixozarn",
+    "Ludane", "Luix", "Lukesh", "Lumora", "Lunax", "Luquell",
+    "Lurix", "Lutari", "Luul", "Luvara", "Luvoss", "Luzarn",
+    "Miradane", "Miraix", "Mirakesh", "Miramora", "Miranax", "Miraquell",
+    "Mirarix", "Miratari", "Miraul", "Miravara", "Miravoss", "Mirazarn",
+    "Nexdane", "Nexix", "Nexkesh", "Nexmora", "Nexnax", "Nexquell",
+    "Nexrix", "Nextari", "Nexul", "Nexvara", "Nexvoss", "Nexzarn",
+    "Oridane", "Oriix", "Orikesh", "Orimora", "Orinax", "Oriquell",
+    "Oririx", "Oritari", "Oriul", "Orivara", "Orivoss", "Orizarn",
+    "Qordane", "Qorix", "Qorkesh", "Qormora", "Qornax", "Qorquell",
+    "Qorrix", "Qortari", "Qorul", "Qorvara", "Qorvoss", "Qorzarn",
+    "Soldane", "Solix", "Solkesh", "Solmora", "Solnax", "Solquell",
+    "Solrix", "Soltari", "Solul", "Solvara", "Solvoss", "Solzarn",
+    "Tekdane", "Tekix", "Tekkesh", "Tekmora", "Teknax", "Tekquell",
+    "Tekrix", "Tektari", "Tekul", "Tekvara", "Tekvoss", "Tekzarn",
+    "Veedane", "Veeix", "Veekesh", "Veemora", "Veenax", "Veequell",
+    "Veerix", "Veetari", "Veeul", "Veevara", "Veevoss", "Veezarn",
+    "Xandane", "Xanix", "Xankesh", "Xanmora", "Xannax", "Xanquell",
+    "Xanrix", "Xantari", "Xanul", "Xanvara", "Xanvoss", "Xanzarn",
+    "Zadane", "Zaix", "Zakesh", "Zamora", "Zanax", "Zaquell",
+    "Zarix", "Zatari", "Zaul", "Zavara", "Zavoss", "Zazarn",
+]
+
+NAME_LAST = [
+    "Aridane", "Ariix", "Arikesh", "Arimora", "Arinax", "Ariquell",
+    "Aririx", "Aritari", "Ariul", "Arivara", "Arivoss", "Arizarn",
+    "Ixodane", "Ixoix", "Ixokesh", "Ixomora", "Ixonax", "Ixoquell",
+    "Ixorix", "Ixotari", "Ixoul", "Ixovara", "Ixovoss", "Ixozarn",
+    "Ludane", "Luix", "Lukesh", "Lumora", "Lunax", "Luquell",
+    "Lurix", "Lutari", "Luul", "Luvara", "Luvoss", "Luzarn",
+    "Miradane", "Miraix", "Mirakesh", "Miramora", "Miranax", "Miraquell",
+    "Mirarix", "Miratari", "Miraul", "Miravara", "Miravoss", "Mirazarn",
+    "Nexdane", "Nexix", "Nexkesh", "Nexmora", "Nexnax", "Nexquell",
+    "Nexrix", "Nextari", "Nexul", "Nexvara", "Nexvoss", "Nexzarn",
+    "Oridane", "Oriix", "Orikesh", "Orimora", "Orinax", "Oriquell",
+    "Oririx", "Oritari", "Oriul", "Orivara", "Orivoss", "Orizarn",
+    "Qordane", "Qorix", "Qorkesh", "Qormora", "Qornax", "Qorquell",
+    "Qorrix", "Qortari", "Qorul", "Qorvara", "Qorvoss", "Qorzarn",
+    "Soldane", "Solix", "Solkesh", "Solmora", "Solnax", "Solquell",
+    "Solrix", "Soltari", "Solul", "Solvara", "Solvoss", "Solzarn",
+    "Tekdane", "Tekix", "Tekkesh", "Tekmora", "Teknax", "Tekquell",
+    "Tekrix", "Tektari", "Tekul", "Tekvara", "Tekvoss", "Tekzarn",
+    "Veedane", "Veeix", "Veekesh", "Veemora", "Veenax", "Veequell",
+    "Veerix", "Veetari", "Veeul", "Veevara", "Veevoss", "Veezarn",
+    "Xandane", "Xanix", "Xankesh", "Xanmora", "Xannax", "Xanquell",
+    "Xanrix", "Xantari", "Xanul", "Xanvara", "Xanvoss", "Xanzarn",
+    "Zadane", "Zaix", "Zakesh", "Zamora", "Zanax", "Zaquell",
+    "Zarix", "Zatari", "Zaul", "Zavara", "Zavoss", "Zazarn",
+]
