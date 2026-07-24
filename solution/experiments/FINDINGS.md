@@ -81,3 +81,16 @@ degrade to conservative review. Not fixed here: the floor was deliberately set
 high to stop low-confidence OSD from rotating good upright pages into bad ones,
 and lowering it needs a full train-set measurement (out of scope for a bounded
 red-team pass, and the current failure mode leaks nothing).
+
+## Round 4: name/sponsor channels exhausted (measured negative)
+
+- **Name syllable grammar**: 23 prefixes x 29 suffixes fully generate all 144
+  attested tokens, but the product (667) adds only false-match targets —
+  validation shows zero unseen tokens. Aggressive matching (edit distance 3-4)
+  against the attested set: 0 additional fixes, 0 breaks. The 198 remaining
+  name misses: 65 no-evidence, 4 shape-destroyed, 129 plausible-but-wrong
+  reads no matcher can detect. Channel exhausted.
+- **Cross-packet sponsor correction**: 52 wrong-digit reads; only 9 have a
+  unique 1-digit neighbor among known sponsors, 26 have >=4 neighbors; 95% of
+  sponsors are singletons so the true value is usually unseen. Ceiling ~0.05
+  pts with real break risk. Dead.
