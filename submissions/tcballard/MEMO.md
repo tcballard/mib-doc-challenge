@@ -3,6 +3,12 @@
 **Author:** tcballard
 **Solution code:** [`solution/`](../../solution) in this repository (offline, CPU-only, Dockerized)
 
+**How this was built:** with an AI pair — Claude (Anthropic) wrote code and
+ran experiments under my direction. I set the strategy, chose what to
+measure, called the ship/kill decisions, and reviewed the results. "We" in
+this memo means exactly that partnership. The full development history,
+including the dead ends, is on the solution branch.
+
 ## 1. What this is
 
 A deterministic, trust-aware evidence engine. It scores **121.9/150** on the
