@@ -98,7 +98,7 @@ def parse_one(path: str, use_ocr: bool = True, allow_escalation: bool = True) ->
     if use_ocr and allow_escalation and rec.ocr_used and (_deficiency(rec) >= 3 or _critical_gap(rec)):
         try:
             from .ocr import make_escalated_ocr_fn
-            pages2 = extract_pages(path, ocr_fn=make_escalated_ocr_fn())
+            pages2 = extract_pages(path, ocr_fn=make_escalated_ocr_fn(base_pages=pages))
             rec2 = parse_packet(case_id, pages2)
             rec = _merge_records(rec, rec2)
         except Exception:

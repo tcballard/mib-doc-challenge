@@ -110,27 +110,29 @@ def recover_missing_fields(rec: Record, pdf_path: str) -> None:
     except Exception:
         return
     try:
+        image_pages = 0
         for pno in range(doc.page_count):
             page = doc[pno]
             if not page.get_images():
                 continue
+            # These fields live on the intake page, always early in the packet;
+            # profiling showed later pages only burn budget (0 wins).
+            image_pages += 1
+            if image_pages > 2:
+                break
             img = None
-            if need_sponsor or need_date:
+            if need_sponsor:
+                # Whole-page whitelist for the sponsor id only. The date
+                # variant of this stage measured 1 correct in 213 firings —
+                # a fabricated-date source, deleted; dates recover via the
+                # label-anchored ROI stage below.
                 img = _render_binarized(page)
                 text = _whitelist_ocr(img, "SPN-0123456789 ")
-                if need_sponsor:
-                    m = SPN_RE.search(text)
-                    if m:
-                        rec.sponsor_id = f"SPN-{m.group(1)}"
-                        rec.field_sources["sponsor_id"] = "whitelist_ocr"
-                        need_sponsor = False
-                if need_date:
-                    for dm in DATE_RE.finditer(text):
-                        if _valid_date(dm.group(1)):
-                            rec.arrival_date = dm.group(1)
-                            rec.field_sources["arrival_date"] = "whitelist_ocr"
-                            need_date = False
-                            break
+                m = SPN_RE.search(text)
+                if m:
+                    rec.sponsor_id = f"SPN-{m.group(1)}"
+                    rec.field_sources["sponsor_id"] = "whitelist_ocr"
+                    need_sponsor = False
             if need_species:
                 if img is None:
                     img = _render_binarized(page)

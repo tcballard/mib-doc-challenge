@@ -52,10 +52,38 @@ def _estimate_skew(img) -> float:
     return float(best_angle)
 
 
+# Per-document render/OSD memo. The base pass, escalation ladder, and both
+# recovery cascades each render and orientation-check the same pages; profiling
+# found 455/667 pixmap renders and 146/251 OSD calls were exact repeats
+# (~15% of OCR wall-clock). One document is cached at a time, so memory stays
+# bounded to a single packet's pages and resets when the next packet arrives.
+_MEMO = {"name": None, "renders": {}, "osd": {}}
+
+
+def _memo_for(page):
+    name = getattr(getattr(page, "parent", None), "name", "") or ""
+    if _MEMO["name"] != name:
+        _MEMO["name"] = name
+        _MEMO["renders"] = {}
+        _MEMO["osd"] = {}
+    return _MEMO
+
+
+def _pix_to_image(pix):
+    # Raw grayscale buffer copy: pixel-identical to the previous PNG
+    # encode/decode roundtrip at a fraction of the cost.
+    return Image.frombytes("L", (pix.width, pix.height), pix.samples)
+
+
 def _render(page, dpi: int, orient: int = 0):
+    memo = _memo_for(page)
+    key = (page.number, dpi, orient)
+    cached = memo["renders"].get(key)
+    if cached is not None:
+        return cached
     mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
     pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
-    img = Image.open(io.BytesIO(pix.tobytes("png")))
+    img = _pix_to_image(pix)
     # Quadrant orientation first (15% of scanned pages in this corpus are
     # rotated 90/180/270 and defeat every downstream pass), then fine deskew.
     if orient:
@@ -63,6 +91,7 @@ def _render(page, dpi: int, orient: int = 0):
     angle = _estimate_skew(img)
     if abs(angle) >= 2:
         img = img.rotate(angle, expand=True, fillcolor=255)
+    memo["renders"][key] = img
     return img
 
 
@@ -76,9 +105,13 @@ def _detect_orientation(page) -> int:
     Only acted on when OSD's own confidence clears a floor — low-confidence
     detections on noisy upright pages otherwise rotate good pages into bad
     ones (measured as a small across-the-board extraction dip)."""
+    memo = _memo_for(page)
+    if page.number in memo["osd"]:
+        return memo["osd"][page.number]
+    result = 0
     try:
         pix = page.get_pixmap(matrix=fitz.Matrix(150 / 72.0, 150 / 72.0), colorspace=fitz.csGRAY)
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        img = _pix_to_image(pix)
         osd = pytesseract.image_to_osd(img, timeout=8)
         rot, conf = 0, 0.0
         for line in osd.splitlines():
@@ -87,10 +120,11 @@ def _detect_orientation(page) -> int:
             elif line.startswith("Orientation confidence:"):
                 conf = float(line.split(":")[1])
         if rot and conf >= MIN_OSD_CONFIDENCE:
-            return rot
+            result = rot
     except Exception:
         pass
-    return 0
+    memo["osd"][page.number] = result
+    return result
 
 
 def _ocr_once(page, dpi: int, psm: int, orient: int = 0) -> List[str]:
@@ -196,10 +230,14 @@ def _ocr_variant(page, dpi: int, psm: int, threshold=None, autocontrast=False) -
     return [s.strip() for s in text.splitlines() if s.strip()]
 
 
-def _escalation_variants(page):
+def _escalation_variants(page, skip_segment: bool = False):
     """Ordered ladder of increasingly aggressive read attempts for a page the
     cheap layers couldn't crack. Yields (family, line-list) so the stopping
-    rule can distinguish technique families."""
+    rule can distinguish technique families.
+
+    ``skip_segment=True`` when the caller seeds the base pass's lines: the two
+    segment rungs are byte-identical re-runs of that pass (same render, same
+    psm) and were measured as pure duplicate cost."""
     from PIL import ImageOps, ImageFilter
     orient = _detect_orientation(page)
     try:
@@ -215,8 +253,9 @@ def _escalation_variants(page):
         except Exception:
             return []
 
-    yield "segment", run(base, 4)
-    yield "segment", run(base, 6)
+    if not skip_segment:
+        yield "segment", run(base, 4)
+        yield "segment", run(base, 6)
     for th in ESCALATION_THRESHOLDS:
         yield "threshold", run(base.point(lambda v, t=th: 255 if v > t else 0), 4)
     for th in ESCALATION_THRESHOLDS:
@@ -235,24 +274,35 @@ def _escalation_variants(page):
 PACKET_ESCALATION_BUDGET_S = 75.0
 
 
-def make_escalated_ocr_fn():
+def make_escalated_ocr_fn(base_pages=None):
     """OCR function for the escalation pass: works down a ladder of variants,
     stopping once two consecutive rungs *from different technique families*
     contribute nothing new (adjacent same-family rungs are often redundant with
     each other, not evidence the page is exhausted). A shared per-packet
     deadline bounds the worst case: past it, remaining pages get no escalation
     and the packet ships as a low-confidence review rather than a blown budget.
+
+    ``base_pages`` (extract.Page list from the cheap pass) seeds each page's
+    line set so the ladder starts from what the base pass already read instead
+    of re-running it: the output still contains the base lines (parsing needs
+    the full page text) but the byte-identical segment rungs are skipped.
     """
     import time
     start = time.monotonic()
+    base_lines = {}
+    if base_pages:
+        for bp in base_pages:
+            if getattr(bp, "ocr_used", False):
+                base_lines[bp.index] = list(bp.visible_lines)
 
     def _fn(page):
         if time.monotonic() - start > PACKET_ESCALATION_BUDGET_S:
             return ocr_page_lines(page)
-        lines: List[str] = []
-        seen = set()
+        seeded = base_lines.get(page.number)
+        lines: List[str] = list(seeded) if seeded else []
+        seen = set(lines)
         dry_families: List[str] = []
-        for family, variant_lines in _escalation_variants(page):
+        for family, variant_lines in _escalation_variants(page, skip_segment=bool(seeded)):
             new = [ln for ln in variant_lines if ln not in seen]
             if new:
                 dry_families = []
