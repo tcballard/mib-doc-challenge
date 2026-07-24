@@ -263,10 +263,11 @@ def _escalation_variants(page, skip_segment: bool = False, deep: bool = True):
         except Exception:
             return []
 
-    # Rungs ordered by measured outcomes-per-second on train (progressive-
-    # inclusion attribution over 30 fired packets, 13/13 outcomes attributed).
-    # Dropped as zero-outcome in 546s of measured ladder time: segment x2
-    # (byte-identical to the base pass), thr100_p6, contrast_p4, denoise_p4.
+    # Original rung set and order preserved: a reorder/prune attempt measured
+    # net-negative on the 76 known escalation-win packets (9 fixed / 15 broken
+    # — line arrival order feeds the merge, and the "zero-outcome" attribution
+    # sample undersampled the winners). New depth is APPENDED instead: added
+    # lines land after the proven ones, so they can only fill, never displace.
     if not skip_segment:
         # Only reachable when the base pass wasn't seeded (direct callers in
         # tests/experiments); the pipeline always seeds.
@@ -276,18 +277,23 @@ def _escalation_variants(page, skip_segment: bool = False, deep: bool = True):
     def thr(t):
         return base.point(lambda v, _t=t: 255 if v > _t else 0)
 
+    for th in ESCALATION_THRESHOLDS:
+        yield "threshold", run(thr(th), 4)
+    for th in ESCALATION_THRESHOLDS:
+        yield "threshold6", run(thr(th), 6)
+    yield "contrast", run(ImageOps.autocontrast(base, cutoff=2), 4)
     # Sparse-text mode: recovers free-floating words when layout analysis fails.
     yield "sparse", run(base, 11)
-    yield "threshold6", run(thr(140), 6)
-    yield "threshold", run(thr(100), 4)
-    yield "threshold", run(thr(140), 4)
-    # Upscale for small/blurry type (1 outcome/104s: poor but real).
+    # Denoise then binarize: beats salt-and-pepper speckle.
+    den = base.filter(ImageFilter.MedianFilter(3))
+    yield "denoise", run(ImageOps.autocontrast(den, cutoff=2).point(lambda v: 255 if v > 130 else 0), 4)
+    # Upscale for small/blurry type.
     up = base.resize((base.width * 2, base.height * 2))
     yield "upscale", run(up.point(lambda v: 255 if v > BINARIZE_THRESHOLD else 0), 6)
-    # Reinvestment rungs (funded by the pruning above): new binarization
-    # cutoffs — different scans respond to different thresholds — and the
-    # best-performing family (sparse) at higher resolution. Tier-2 depth:
-    # the governor sheds these first when pacing over budget.
+    # Reinvestment rungs (funded by the render/OSD caching and seeding): new
+    # binarization cutoffs — different scans respond to different thresholds —
+    # and the sparse family at higher resolution. Tier-2 depth: the governor
+    # sheds these first when pacing over budget.
     if not deep:
         return
     yield "threshold6", run(thr(80), 6)
@@ -333,15 +339,11 @@ def make_escalated_ocr_fn(base_pages=None, deep: bool = True):
         dry_families: List[str] = []
         for family, variant_lines in _escalation_variants(page, skip_segment=bool(seeded), deep=deep):
             new = [ln for ln in variant_lines if ln not in seen]
-            for ln in new:
-                seen.add(ln)
-                lines.append(ln)
-            # A rung is "dry" when it adds nothing *legible* — psm alternation
-            # always yields never-seen-before junk strings, so counting any
-            # new line as progress made the old stop rule dead code (66/67
-            # escalated pages ran the full ladder).
-            if any(_LEGIBLE_PATTERNS.search(ln) for ln in new):
+            if new:
                 dry_families = []
+                for ln in new:
+                    seen.add(ln)
+                    lines.append(ln)
             else:
                 dry_families.append(family)
                 if len(set(dry_families)) >= 2 and lines:

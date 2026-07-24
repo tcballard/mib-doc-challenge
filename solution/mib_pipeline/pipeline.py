@@ -131,10 +131,10 @@ CORE_FIELDS = ("applicant_name", "species_code", "home_world", "visa_class",
 def _critical_gap(rec: Record, pages=None) -> bool:
     """A single missing item that likely swings the verdict outweighs several
     peripheral fields: escalate on value, not just volume."""
+    if (rec.risk_flags or "none") == "none" and "biometric" not in rec.present_pages:
+        return True  # a hidden disqualifying flag flips APPROVED to DENIED (-4 vs +8)
     # An OCR page whose base pass read *nothing legible* is direct evidence of
-    # unread content — escalate. (The previous trigger — "no flags and no
-    # recognized biometric page" — fired on 47% of OCR packets at ~4.8s CPU
-    # each for 1 non-scoring outcome in 19; mere absence is not evidence.)
+    # unread content — escalate even when the parsed record looks complete.
     if pages is not None:
         from .ocr import _legibility
         if any(p.ocr_used and _legibility(p.visible_lines) == 0 for p in pages):
