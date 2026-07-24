@@ -94,3 +94,19 @@ red-team pass, and the current failure mode leaks nothing).
   unique 1-digit neighbor among known sponsors, 26 have >=4 neighbors; 95% of
   sponsors are singletons so the true value is usually unseen. Ceiling ~0.05
   pts with real break risk. Dead.
+
+## Round 5: performance sequence outcomes (perf-review swarm, gated)
+
+- Shipped: render/OSD memoization, raw-buffer decode, escalation seeding
+  (parity-verified: 33-packet sample byte-identical, 32% faster), lazy OSD,
+  targeted flag sweep, appended tier-2 rungs (thr 80/160/170, sparse@400dpi),
+  two-tier governor. Fleet: 4.1 -> 3.63 s/PDF with tier-2 on; train 122.02.
+- Reverted by gate: ladder reorder/prune + legibility stop rule measured
+  9 fixed / 15 broken on the 76 escalation-win packets. Line arrival order
+  feeds the merge; "zero-outcome" rung attribution undersampled winners.
+- EV-accepted: +1 catastrophic (MIB-000381) — deeper escalation completes
+  packets whose unreadable slips hide flags; guarding the bucket costs 335
+  vs 116 points (43/49 truth-approved). Approval stands.
+- Definitive negative: label-anchored flags-ROI read on all 220 remaining
+  flag misses: 0 hits, 218 empty, 2 partial-wrong. The remaining misses have
+  no machine-readable evidence at any threshold/DPI/segmentation tested.
