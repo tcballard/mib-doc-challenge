@@ -659,11 +659,23 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             return _pflags["sponsor"]
         return rec.ocr_used
 
+    # Identity fields where an exact digital reading outranks page precedence.
+    # Page order encodes which *form* is most authoritative, which is the right
+    # tiebreak between two equally-legible readings — but it says nothing about
+    # legibility, so a garbled scan of the intake form used to win over a clean
+    # text-layer copy of the same field further down the packet, and nothing
+    # downstream could revisit it. declared_purpose is deliberately absent: it
+    # feeds the transit-purpose denial rule, where measurement showed the
+    # precedence order is doing real work. Risk flags never pass through here.
+    PREFER_DIGITAL = {"applicant_name", "species_code", "home_world",
+                      "visa_class", "arrival_date"}
+
     def pick(fieldname, *sources):
         # A damage marker ("[NAME CUT OUT]", "UNREADABLE") or — for dates — a
         # calendar-invalid OCR garble must not shadow a clean value from a
         # lower-precedence page; skip past it and keep looking.
         fallback = ("", "")
+        usable = []
         for src_name, d in sources:
             v = d.get(fieldname)
             if not v:
@@ -675,9 +687,14 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 if not fallback[1]:
                     fallback = (src_name, v)
                 continue
-            rec.field_sources[fieldname] = src_name
-            src_ocr[fieldname] = _prov_of(src_name, fieldname)
-            return v
+            usable.append((src_name, v))
+        if usable:
+            best = usable[0]
+            if fieldname in PREFER_DIGITAL and _prov_of(best[0], fieldname):
+                best = next((c for c in usable if not _prov_of(c[0], fieldname)), best)
+            rec.field_sources[fieldname] = best[0]
+            src_ocr[fieldname] = _prov_of(best[0], fieldname)
+            return best[1]
         if fallback[1]:
             rec.field_sources[fieldname] = fallback[0]
             src_ocr[fieldname] = _prov_of(fallback[0], fieldname)
@@ -793,15 +810,17 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     # first candidate that actually matches the SPN pattern wins (a truthy but
     # unparseable intake reading must not shadow a valid letter/sweep value).
     corr_spn = SPONSOR_RE.search(rec.corrections.get("sponsor_id", "") or "")
-    for cand, cand_ocr in ([(corr_spn.group(0), False)] if corr_spn else []) + [
-            (intake.get("sponsor_id"), prov_intake.get("sponsor_id", rec.ocr_used)),
-            (rec.sponsor_letter_id, _pflags["sponsor"]),
-            (rec.sponsor_id, rec.ocr_used)]:
-        m = SPONSOR_RE.search(cand or "")
-        if m:
-            rec.sponsor_id = m.group(0)
-            src_ocr["sponsor_id"] = cand_ocr
-            break
+    spn_cands = ([(corr_spn.group(0), False)] if corr_spn else []) + [
+        (intake.get("sponsor_id"), prov_intake.get("sponsor_id", rec.ocr_used)),
+        (rec.sponsor_letter_id, _pflags["sponsor"]),
+        (rec.sponsor_id, rec.ocr_used)]
+    spn_ok = [(m.group(0), o) for c, o in spn_cands if (m := SPONSOR_RE.search(c or ""))]
+    if spn_ok:
+        # Same digital preference as pick(): a four-digit sponsor code is one
+        # transposed character away from a different real sponsor, so an exact
+        # reading outranks precedence order.
+        rec.sponsor_id, src_ocr["sponsor_id"] = next(
+            (c for c in spn_ok if not c[1]), spn_ok[0])
     spn_occurrences: List[str] = []
     for p in use_pages:
         for ln in p.visible_lines:
