@@ -110,3 +110,49 @@ red-team pass, and the current failure mode leaks nothing).
 - Definitive negative: label-anchored flags-ROI read on all 220 remaining
   flag misses: 0 hits, 218 empty, 2 partial-wrong. The remaining misses have
   no machine-readable evidence at any threshold/DPI/segmentation tested.
+
+## Round 5 audit: miss anatomy and the closing of the OCR-repair channel
+
+Full census of every field-level miss at v21 (n=1000, replayed through the
+real `_format_row`): 1363 misses = 972 empty/placeholder emissions (5.69 ext
+pts), 287 OCR wrong-reads (1.57), 104 shape-destroyed junk emissions (0.54).
+Digital wrong-reads: **zero** across all nine fields — there are no parse
+bugs on the clean text layer. The empty bucket is dominated by dead channels
+(risk_flags 208, the 0/220 ROI result above) and 45 packets whose evidence is
+physically destroyed, so the addressable pool is the 2.11 ext pts of
+wrong-reads and junk, all on OCR packets.
+
+- **Shipped: batch-level revoked-sponsor harvest.** SPN-7331 is named revoked
+  in an adjudicator note but was missing from the static set, because the
+  packet carrying the note had its own sponsor field misread. Harvesting the
+  declaration from every note in the batch recovers all six known sponsors on
+  train with zero false positives. Measured 122.02 -> 122.78, catastrophic
+  23 -> 18. A sweep confirms completeness: no other sponsor reaches 3 non-DIP
+  cases at >=75% denial, and no further embargo world clears the bar
+  (next candidate, mars dome-7, sits at 0.47).
+- **Shipped: visa_class prefix truncation.** The one closed-vocab field never
+  run through `_prefix_truncate`; 10 packets emitted the exactly-correct class
+  followed by OCR noise. +0.05 ext, zero break.
+- **Dead: multi-variant OCR voting.** 15 ladder variants per page, parsed
+  independently and voted per field over 40 wrong-read cases plus 20 correct
+  controls. Truth appears in *any* variant only 6/18 completed wrong-read
+  cases; vocab-aware majority picks it 6 times across the full probe — while
+  flipping 4 of 20 correct controls wrong, one of them onto a revoked sponsor
+  (MIB-000013 SPN-6818 -> SPN-4040). Variants share systematic misreads, so
+  voting converges confidently on wrong values (MIB-000071 votes a name 9-1
+  that is not the truth). Net negative before counting the ~all of the
+  remaining budget it would cost. Channel closed.
+- **Dead: catastrophic guards.** Every approval-narrowing guard tested against
+  the truth mix loses: flags_observed=False -3.30 cls, digital-only -3.15,
+  fee_observed=False -0.91, no-registry-page -1.36, union -4.16. After the
+  SPN-7331 fix the 18 remaining catastrophics are 14 hidden risk_flags on the
+  dead channel, 3 blind-fee defaults, and 1 OCR visa misread.
+- **Dead: calibration refit.** Of 21 reason buckets only identity_conflict
+  trips |acc-conf|>=0.05 at n>=10 (0.500 vs 0.44), worth +0.004 cal. Refitting
+  *every* bucket to exact empirical accuracy is worth +0.026 total, well
+  inside train noise at the bucket sizes involved. Calibration is converged.
+- **Dead: EV re-routing.** 19 of 20 buckets are already EV-optimal. The single
+  classification-EV violation, incomplete_evidence (EV_A 3.00 vs EV_R 2.86,
+  n=42), is net-negative on the full score: cls +0.06 but cal -0.22 and
+  catastrophics 18 -> 32. Routing stands as-is; recorded so it is not
+  re-litigated.
