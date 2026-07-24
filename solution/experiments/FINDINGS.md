@@ -156,3 +156,20 @@ wrong-reads and junk, all on OCR packets.
   n=42), is net-negative on the full score: cls +0.06 but cal -0.22 and
   catastrophics 18 -> 32. Routing stands as-is; recorded so it is not
   re-litigated.
+
+- **Dead: junk truncation beyond visa_class.** Censused every junk emission
+  for a correct-value prefix: visa 10/30, name 0/12, species 0/19, world
+  0/24, purpose 0/15. visa was the only vein and it is shipped.
+- **Dead: raising the per-packet escalation deadline.** No packet comes near
+  the 75s cap — escalated extraction runs mean 22.1s, max 35.6s single-thread
+  across the historically slowest packets. The two-dry-families stopping rule
+  terminates the ladder long before the clock does, so the deadline is pure
+  headroom and raising it changes zero packets.
+
+Budget anatomy at v21 (30-packet stratified profile, validated against the
+known 3.63 s/PDF): digital packets 0.10s, light-OCR 4.57s, escalated 31.1s
+single-thread; the escalated stratum is 86.8% of all compute and tesseract is
+~84% of that. Renders are effectively free post-memoization. One extra ladder
+variant costs 0.60s per OCR page. Crucially the "2.37 s/PDF unspent" figure is
+not spendable: the tier-2 governor trips at 0.78x contract, so the honest
+always-on margin is about 1.2 s/PDF.
