@@ -70,11 +70,11 @@ keyed to specific PDFs. Staleness uses the batch's most recent arrival date as
 
 | Section | Score |
 | --- | --- |
-| Classification | 63.5 / 80 |
-| Field extraction | 41.5 / 50 |
-| Confidence calibration | 15.6 / 20 |
-| **Deterministic total** | **≈120.6 / 150** |
-| Catastrophic false approvals | 24 / 1000 |
+| Classification | 64.1 / 80 |
+| Field extraction | 42.0 / 50 |
+| Confidence calibration | 15.7 / 20 |
+| **Deterministic total** | **≈121.8 / 150** |
+| Catastrophic false approvals | 22 / 1000 |
 
 Training extraction is a *lower bound* on the graded score: many of its "misses"
 are damaged fields (`[DATE WASHED OUT]`, cut-out names) that the private labels
@@ -110,7 +110,7 @@ unlocks an approval.
   private test that introduces new embargoed worlds without an adjudicator note
   would slip through. The note path and the registry "EMBARGO REVIEW" status
   (both stated in-document) are the generalizable backstops.
-- **Catastrophic false approvals** run ~24/1000 on train — the price of
+- **Catastrophic false approvals** run ~22/1000 on train — the price of
   EV-optimal approval on a bucket with residual label noise; each is a case
   whose denial evidence is absent from the packet.
 
@@ -131,15 +131,40 @@ unlocks an approval.
 4. **Barcodes — negative.** No decodable barcodes exist; "BARCODE PAYLOAD"
    strings are text-layer traps (correctly ignored as instructions).
 
+5. **Label-anchored region re-OCR — shipped, ~neutral on train.** Locate a
+   field's label via word bounding boxes, crop the value region, upscale,
+   single-line whitelist OCR. Fill-only-empty by construction, so it is kept
+   as free precision salvage even though the training gain measured ≈0.
+6. **Held-out calibration — measured, current table kept.** 5-fold
+   cross-validation puts the in-sample optimism of the per-reason confidence
+   table at ~0.3 calibration points; every finer bucket split tested
+   (× OCR-used, × biometric-present, × missing-field count, × fee-observed)
+   scores *worse* out-of-fold than the shipped reason-only table, so the
+   table's shape stands as measured-optimal.
+7. **Adversarial self-attack suite — one real bug found and fixed.** Seven
+   PyMuPDF mutation attacks on real packets
+   (`solution/experiments/adversarial_suite.py`): six defenses held (footer
+   rewording, printed/novel injections, rotation, unseen vocabulary, pale-ink
+   hidden text); one bug fixed (novel risk-flag tokens on clean digital slips
+   were dropped as OCR noise, bypassing the unknown-flag review rule).
+8. **Unused-evidence census — five rules shipped (+~1.0 measured).** The
+   registry's "sponsor standing requires additional verification" notice
+   (denies non-diplomats 23/23, never blocks DIP-1 5/5), the fee receipt's
+   dollar amount ($809.00 ⇒ paid 297/297, emission-only), the sponsor letter's
+   "class X compliance" line as visa evidence (294/294), the digital
+   intake-vs-registry name-swap trap (registry correct 7/7), and trailing-junk
+   truncation at emission (names are always two words; purpose/world come from
+   closed vocabularies — 35 fixes, 0 breaks).
+
 ## 6. What I'd do with another week
 
 1. **Tesseract C API (`tesserocr`)** instead of subprocess-per-page (~35%
    runtime), reinvested in more preprocessing variants (multiple binarization
    thresholds, adaptive thresholding) — different thresholds unlock different
    degraded pages.
-2. **Label-anchored region re-OCR**: locate a field's label via word bounding
-   boxes, crop the value region, upscale, single-line whitelist OCR — the
-   precision version of the current whole-page whitelist salvage.
-3. **Confidence via held‑out calibration** (isotonic regression on an
-   out‑of‑fold split) rather than in‑sample bucket accuracy, to derisk the mild
-   optimism of calibrating on the same data the rules were tuned on.
+2. **Sub-quadrant deskew**: page skews beyond ±12° with low-confidence
+   orientation detection currently fail safe to review; a rotation-sweep
+   scored by OCR word yield could recover them.
+3. **Biometric-slip name channel**: on OCR packets the slip's name line was
+   exactly right in several cases where the chosen source was wrong — too few
+   samples to ship a precedence change, worth measuring at scale.
