@@ -105,7 +105,7 @@ REASON_CONFIDENCE = {
     "fee_unknown": 0.98,
     "missing_arrival_date": 0.29,
     "review_flag": 0.90,
-    "identity_conflict": 0.44,
+    "identity_conflict": 0.50,
     "unsupported_waiver": 0.50,
     "incomplete_evidence": 0.17,
     "clean_approved": 0.68,

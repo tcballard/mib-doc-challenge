@@ -5,7 +5,7 @@ from mib_pipeline.parse import Record, Note
 from mib_pipeline.policy import adjudicate, harvest_policy_facts
 from mib_pipeline.pipeline import _format_row
 
-recs = json.load(open(sys.argv[1] if len(sys.argv)>1 else "/tmp/parse_cache_v3.json"))
+recs = json.load(open(sys.argv[1] if len(sys.argv)>1 else "/tmp/parse_cache_v21.json"))
 truth = {r["case_id"]: r for r in csv.DictReader(open("data/train_labels.csv"))}
 def _d(s):
     m = re.search(r"(\d{4})-(\d{2})-(\d{2})", s or "")

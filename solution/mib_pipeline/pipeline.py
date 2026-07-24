@@ -378,10 +378,14 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
     todo = [p for p in pdfs if Path(p).stem not in done]
 
     total_budget = BUDGET_S_PER_PDF * len(pdfs) * BUDGET_SAFETY
-    # Tier-2 depth sheds first (at 0.72x the raw contract = 0.9x total_budget),
-    # full escalation second (at 0.80x = total_budget): a two-step degradation
-    # instead of one cliff.
-    tier2_budget = BUDGET_S_PER_PDF * len(pdfs) * 0.72
+    # Tier-2 depth sheds first (at 0.78x the raw contract = 0.975x
+    # total_budget), full escalation second (at 0.80x = total_budget): a
+    # two-step degradation instead of one cliff. The first tier sat at 0.72x
+    # when the fleet ran 4.1 s/PDF; at the measured 3.45 s/PDF it was shedding
+    # proven depth a full 1.7 s/PDF short of the contract on any corpus with a
+    # heavier scanned mix than train, so it moves out to 0.78 (trip at 4.68
+    # s/PDF) while the escalation-off tier and the per-packet cap stand.
+    tier2_budget = BUDGET_S_PER_PDF * len(pdfs) * 0.78
     start = time.monotonic()
     allow_escalation = True
     deep = True
