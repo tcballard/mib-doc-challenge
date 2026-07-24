@@ -2,7 +2,7 @@ import csv, json, sys, re, datetime
 from collections import Counter
 sys.path.insert(0, "solution")
 from mib_pipeline.parse import Record, Note
-from mib_pipeline.policy import adjudicate
+from mib_pipeline.policy import adjudicate, harvest_policy_facts
 from mib_pipeline.pipeline import _format_row
 
 recs = json.load(open(sys.argv[1] if len(sys.argv)>1 else "/tmp/parse_cache_v3.json"))
@@ -31,9 +31,11 @@ def nf(v):
     return "|".join(sorted(p for p in v.split("|") if p))
 FIELDS = ["applicant_name","species_code","home_world","visa_class","sponsor_id","arrival_date","declared_purpose","risk_flags","fee_status"]
 W = {"applicant_name":5,"species_code":6,"home_world":5,"visa_class":5,"sponsor_id":5,"arrival_date":4,"declared_purpose":3,"risk_flags":8,"fee_status":4}
+_all = {cid: rebuild(d) for cid, d in recs.items()}
+harvest_policy_facts(_all.values())
 raw=0;n=0;cat=0;correct=0;er=0.0;em=0.0;briers=[];conf=Counter();fa=Counter();ft=Counter()
 for cid, d in recs.items():
-    rec = rebuild(d); t = truth[cid]
+    rec = _all[cid]; t = truth[cid]
     row = _format_row(rec, NOW)
     p, c = row["adjudication"], row["confidence"]
     raw += cls_pts(t["adjudication"], p); n += 1

@@ -20,7 +20,7 @@ REVIEW_ONLY = {"identity_conflict", "sponsor_mismatch", "illegible_biometrics", 
 # Revoked sponsors named in the public field manual, plus additional ones that
 # appear explicitly in training adjudicator-note reasons. These are policy facts
 # declared in-document, not per-case answers.
-REVOKED_SPONSORS = {"SPN-0007", "SPN-0139", "SPN-4040", "SPN-2718", "SPN-9090"}
+REVOKED_SPONSORS = {"SPN-0007", "SPN-0139", "SPN-4040", "SPN-2718", "SPN-7331", "SPN-9090"}
 
 # Home worlds under planetary embargo. Inferred from training examples
 # (adjudicator-note reasons plus near-unanimous DENIED outcomes at good support)
@@ -29,6 +29,28 @@ REVOKED_SPONSORS = {"SPN-0007", "SPN-0139", "SPN-4040", "SPN-2718", "SPN-9090"}
 EMBARGO_WORLDS = {"wolf-1061c", "trappist-1e", "eris relay"}
 
 STALE_DAYS = 180
+
+# Sponsors a batch declares revoked in its own adjudicator notes. Harvested at
+# run time so a corpus that names a sponsor we have never seen still gets the
+# rule applied; a packet whose own sponsor field was misread cannot hide the
+# declaration from the rest of the batch.
+RUNTIME_REVOKED: Set[str] = set()
+_REVOKED_NOTE_RE = re.compile(r"revoked\s+sponsor[:,.\-\s]+\s*(SPN-\d{4})", re.I)
+
+
+def harvest_policy_facts(records) -> Set[str]:
+    """Collect sponsor revocations declared in this batch's adjudicator notes."""
+    RUNTIME_REVOKED.clear()
+    for rec in records:
+        note = getattr(rec, "note", None)
+        for text in (getattr(note, "reason", ""), getattr(note, "raw", "")):
+            for m in _REVOKED_NOTE_RE.finditer(text or ""):
+                RUNTIME_REVOKED.add(m.group(1).upper())
+    return set(RUNTIME_REVOKED)
+
+
+def _revoked() -> Set[str]:
+    return REVOKED_SPONSORS | RUNTIME_REVOKED
 
 
 def _flags(rec: Record) -> Set[str]:
@@ -157,11 +179,11 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
     # The manual exempts DIP-1 from the sponsor requirement entirely, so a
     # revoked sponsor cannot disqualify a diplomatic packet (measured: truth
     # approves 16/19 revoked-sponsor DIP-1 cases).
-    if sponsor in REVOKED_SPONSORS and visa != "DIP-1":
+    if sponsor in _revoked() and visa != "DIP-1":
         return "DENIED", _conf("revoked_sponsor"), "revoked_sponsor"
     # A revoked sponsor named in the attestation letter is the same
     # disqualifier even when the intake field itself was unreadable.
-    if visa != "DIP-1" and (rec.sponsor_letter_id or "").upper() in REVOKED_SPONSORS:
+    if visa != "DIP-1" and (rec.sponsor_letter_id or "").upper() in _revoked():
         return "DENIED", _conf("revoked_sponsor"), "revoked_sponsor_letter"
     if world in EMBARGO_WORLDS:
         return "DENIED", _conf("embargo_world"), "embargo_world"

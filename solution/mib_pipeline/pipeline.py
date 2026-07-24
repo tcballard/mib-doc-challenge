@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 
 from .extract import extract_pages
 from .parse import parse_packet, Record
-from .policy import adjudicate, _parse_date
+from .policy import adjudicate, harvest_policy_facts, _parse_date
 
 try:
     from .ocr import make_ocr_fn, ocr_available
@@ -285,7 +285,8 @@ def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
                     second = d
             return best if (bd <= 2 and second > bd) else tok
         name_out = f"{_tok_fix(name_words[0], NAME_FIRST)} {_tok_fix(name_words[1], NAME_LAST)}"
-    from .vocab import HOME_WORLDS, PURPOSES
+    from .vocab import HOME_WORLDS, PURPOSES, VISA_CLASSES
+    visa_out = _prefix_truncate(visa_out, VISA_CLASSES)
     world_out = _prefix_truncate(rec.home_world, HOME_WORLDS)
     purpose_out = _prefix_truncate(rec.declared_purpose, PURPOSES)
     return {
@@ -433,6 +434,7 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
 
 def _write_predictions(records: List[Record], out: Path) -> None:
     now = batch_reference_date(records)
+    harvest_policy_facts(records)
     results = [_format_row(rec, now) for rec in records]
     results.sort(key=lambda r: r["case_id"])
     tmp = out.with_suffix(out.suffix + ".tmp")
