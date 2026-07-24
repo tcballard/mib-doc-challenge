@@ -173,3 +173,35 @@ single-thread; the escalated stratum is 86.8% of all compute and tesseract is
 variant costs 0.60s per OCR page. Crucially the "2.37 s/PDF unspent" figure is
 not spendable: the tier-2 governor trips at 0.78x contract, so the honest
 always-on margin is about 1.2 s/PDF.
+
+## Round 6: provenance
+
+- **Shipped: the provenance gate.** Corroboration voting treated all readings
+  as equal evidence, so a garbled OCR reading of a field could outvote the
+  digital page it was a misreading *of*. Per-field provenance is now tracked
+  through the page loop and the precedence resolver, gating corroboration
+  voting, character-majority merging, and the sponsor-letter override.
+  Corpus-wide: 36 raw-field corrections, **0 regressions**.
+- **The gate had to be narrowed to its own premise.** Blocking every override
+  on a digital field cost 7 regressions, all one shape: the packet names two
+  genuinely different people and the other pages corroborate the one the
+  intake page does not carry. That is not a misreading, so the "digital is
+  exact" premise does not apply and the majority is the better evidence.
+  Gating only on *same-person variants* (reusing the sponsor-letter edit
+  distance rather than inventing a second threshold) kept 25 of 26 fixes and
+  dropped all 7 regressions -- better on both axes than the broad form.
+  The separator is wide: fixes ran 0.73-0.92 similarity, regressions 0.21-0.43.
+- **Two thirds of raw-field fixes never reach the score.** Of 36 corrected
+  fields only 25 changed the emitted row; the other 11 were already being
+  repaired downstream by vocabulary snapping. Extraction gains must be
+  measured after `_format_row`, not on the Record.
+- **Correction: the field weight table.** Targeted probes had been scoring
+  with name/world/sponsor=10 and risk_flags=15. The evaluator uses
+  name/world/sponsor=5, risk_flags=8, species=6, arrival=4, purpose=3,
+  fee=4 (sum 45). Every prior estimate over those fields was ~2x hot. The
+  gate's honest yield is +0.14 extraction, not the +0.28 first projected.
+- **OCR memo parity discharged.** 30/30 escalated packets replayed with the
+  memo live, zero differences across all 19 record fields.
+
+Train after round 6: **122.97/150** (cls 64.75, ext 42.39, cal 15.83,
+brier 0.104), 18 catastrophic false-approvals.
