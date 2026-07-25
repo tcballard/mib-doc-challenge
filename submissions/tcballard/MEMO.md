@@ -11,8 +11,8 @@ dead ends, is on the solution branch.
 
 ## 1. What this is
 
-A deterministic, trust-aware evidence engine. It scores **121.9/150** on the
-training set with 22 catastrophic false approvals in 1000 cases. No ML model
+A deterministic, trust-aware evidence engine. It scores **123.2/150** on the
+training set with 17 catastrophic false approvals in 1000 cases. No ML model
 makes any decision — we tried that, measured it, and it lost (details in
 section 5).
 
@@ -62,11 +62,11 @@ own most recent arrival date, so the system works in any data era.
 
 | Section | Score |
 | --- | --- |
-| Classification | 64.1 / 80 |
-| Field extraction | 42.0 / 50 |
-| Confidence calibration | 15.7 / 20 |
-| **Deterministic total** | **≈121.9 / 150** |
-| Catastrophic false approvals | 22 / 1000 |
+| Classification | 64.8 / 80 |
+| Field extraction | 42.6 / 50 |
+| Confidence calibration | 15.8 / 20 |
+| **Deterministic total** | **123.2 / 150** |
+| Catastrophic false approvals | 17 / 1000 |
 
 Training extraction is a floor, not a ceiling: many "misses" are fields the
 documents physically destroyed (`[DATE WASHED OUT]`, cut-out names) that the
@@ -101,9 +101,15 @@ an approval.
   training. A private test with new embargoed worlds and no adjudicator note
   would slip through. The note path and the registry "EMBARGO REVIEW" status
   — both stated in-document — are the generalizable backstops.
-- **22 catastrophic false approvals per 1000.** The price of EV-optimal
-  approval on a bucket with residual label noise. Each one is a case whose
-  denial evidence is absent from the packet.
+- **17 catastrophic false approvals per 1000.** The price of EV-optimal
+  approval on a bucket with residual label noise. Fourteen of the seventeen
+  are risk-flag misses, and we rendered every page of all fourteen to check:
+  eleven have no biometric page in the file at all, and the biometric slip in
+  one of the remaining three states "Observed Item: RISK PANEL MISSING" in as
+  many words. The denial evidence is not degraded, it is absent. Refusing to
+  approve any packet missing its biometric page was measured and costs about
+  2.25 classification points to save eleven, because 66 packets are correctly
+  approved without one.
 
 ## 5. What we tried, with numbers
 
