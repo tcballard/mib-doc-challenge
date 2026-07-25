@@ -246,3 +246,53 @@ brier 0.104), 18 catastrophic false-approvals.
 
 Train after round 7: **123.21/150** (cls 64.75, ext 42.63, cal 15.84,
 brier 0.104), 17 catastrophic false-approvals.
+
+## Round 8: orientation, and rungs that went bad
+
+- **Quadrant rotation was effectively unhandled, and it was the largest
+  single gain of the effort.** Every rung of the escalation ladder varies
+  threshold, contrast or resolution, but all of them read the page at one
+  orientation, so a page whose rotation was missed upstream is unreadable at
+  every rung. The only orientation mechanism was `_detect_orientation`, and
+  Tesseract's OSD confidence almost never clears the floor on this corpus
+  (median 0.79, max 3.48 over 50 readings; half the calls abort with "Too few
+  characters"), so in practice nothing handled rotation at all. Trialling 90
+  and 270 on illegible pages, and adding rotated re-reads at psm 4 and 6 to
+  the ladder, is worth **+1.27** on full train.
+- **The ablations were misleading in a way worth recording.** Measured on the
+  lowest-confidence decile, the first-pass orientation trial alone gave +0.15
+  and a 400/600 dpi tail alone gave +0.14, but together they gave +1.00. The
+  apparent superadditivity was an artifact: the rotated *ladder* rungs sat
+  behind the hi-dpi flag, so they only ran when both switches were on. Split
+  onto their own flag, the rotated rungs alone gave +0.93 of the +1.00 at
+  39% of the added cost, and the hi-dpi tail was dropped. An interaction
+  effect that looks physical is worth re-checking against the gating before
+  it is believed.
+- **Forcing escalation onto low-confidence packets buys nothing (+0.06).**
+  The mechanism needed no confidence targeting, no second pass over the
+  lowest-confidence decile, and no change to the budget governor -- the
+  ladder's own trigger was already firing on the right packets. A terminal
+  reinvestment pass was designed in some detail before this measurement
+  killed it; the slice experiment that motivated it under-predicted the
+  always-on gain (+0.87 predicted, +1.27 delivered) because it only ever
+  moved 15% of the corpus.
+- **Four tier-2 rungs had gone bad.** Three extra binarization cutoffs and a
+  400 dpi sparse pass, added as reinvestment depth in an earlier round, now
+  measure at **-0.04 for about a second per PDF**, and removing them takes
+  the catastrophic count from 18 back to 17. Extraction dips 0.08 while
+  classification rises 0.13: every extra rung is another chance for a
+  mediocre read to occupy an empty field before a better one arrives, which
+  is the fill-only-empty merge's standing weakness. Rung value is contingent
+  on what else is in the ladder, so a rung measured positive when it was
+  added is not still positive once the ladder around it changes. The
+  remaining rungs deserve the same re-examination.
+- **Timing.** 4.147 s/PDF before this round, 5.185 with the quadrant rungs
+  and the dead ones still in, **4.534** after removing them (150-packet
+  stratified sample, quiet 4-core box, 0 errors). Projected 5000-packet run
+  22,669 s: inside the tier-2 shed threshold by 730 s, the governor's target
+  by 1,330 s and the hard cap by 7,330 s. No governor change was needed.
+  Note the pipeline runs 4.5 s/PDF where `pipeline.py`'s tuning comment still
+  assumes 3.45 -- the margins are thinner than that comment believes.
+
+Train after round 8: **124.53/150** (cls 65.41, ext 43.27, cal 15.85,
+brier 0.104), 17 catastrophic false-approvals.
