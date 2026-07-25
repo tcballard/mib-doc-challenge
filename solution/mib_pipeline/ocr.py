@@ -344,26 +344,19 @@ def _escalation_variants(page, skip_segment: bool = False, deep: bool = True):
     # Upscale for small/blurry type.
     up = base.resize((base.width * 2, base.height * 2))
     yield "upscale", run(up.point(lambda v: 255 if v > BINARIZE_THRESHOLD else 0), 6)
-    # Reinvestment rungs (funded by the render/OSD caching and seeding): new
-    # binarization cutoffs — different scans respond to different thresholds —
-    # and the sparse family at higher resolution. Tier-2 depth: the governor
-    # sheds these first when pacing over budget.
+    # Tier-2 depth: the governor sheds what follows first when pacing over
+    # budget. Three further binarization cutoffs and a 400 dpi sparse pass
+    # used to live here; measured against the quadrant rungs below they were
+    # worth -0.04 for a full second per PDF, so they are gone rather than
+    # merely demoted.
     if not deep:
         return
-    yield "threshold6", run(thr(80), 6)
-    yield "threshold6", run(thr(160), 6)
-    yield "threshold", run(thr(170), 4)
-    try:
-        base400 = _render(page, 400, orient=orient)
-        yield "sparse400", run(base400, 11)
-    except Exception:
-        pass
     # Quadrant re-reads. The ladder above varies threshold, contrast and
     # resolution but every rung reads the page at one orientation, so a page
     # whose rotation was missed upstream is unreadable at every rung. These
-    # two carry nearly all of the measured escalation gain (+0.93 of +1.00 on
-    # the low-confidence decile); a 400/600 dpi tail trialled alongside them
-    # bought the remaining 0.07 for three times the time and was dropped.
+    # two carry nearly all of the escalation gain; a 400/600 dpi tail
+    # trialled alongside them bought a further 0.07 for three times the time
+    # and is not included.
     for quadrant in FORCED_QUADRANTS:
         try:
             rotated = _render(page, 300, orient=quadrant)
