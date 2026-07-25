@@ -205,3 +205,44 @@ always-on margin is about 1.2 s/PDF.
 
 Train after round 6: **122.97/150** (cls 64.75, ext 42.39, cal 15.83,
 brier 0.104), 18 catastrophic false-approvals.
+
+## Round 7: fill order, and the fourteen packets that cannot be fixed
+
+- **Page precedence was deciding legibility questions.** Round 6 stopped an
+  OCR misreading from *overwriting* a digital value, but left a second route
+  to the same damage: `pick()` walks sources in page-precedence order and
+  takes the first non-empty one, so a garbled scan of the intake form won
+  over a clean text-layer copy of the same field further down the packet,
+  and nothing downstream could revisit it. Precedence encodes which *form*
+  is authoritative -- the right tiebreak between two equally legible
+  readings -- but says nothing about legibility. Preferring an exact digital
+  reading on the five identity fields (`applicant_name`, `species_code`,
+  `home_world`, `visa_class`, `arrival_date`, plus `sponsor_id` in its own
+  resolver) is worth +0.24 on full train, all of it extraction, and removes
+  one catastrophic false-approval. `declared_purpose` is deliberately
+  excluded: it feeds the transit-purpose denial rule where the precedence
+  order was measured to be doing real work. Risk flags never pass through
+  `pick()`.
+- **The remaining risk_flags catastrophes are unrecoverable, and the
+  earlier "destroyed evidence" reading was wrong.** Rendering all fourteen
+  at 150dpi settles it. Eleven are fully digital three-page packets -- fee
+  receipt, registry extract, I-8090 intake -- with clean text layers that we
+  read correctly and *no biometric page at all*. The registry status on
+  those pages reads CLEAR. The flag was never printed anywhere in the file.
+  The other three do carry degraded full-page scans, but the biometric slip
+  on MIB-000381 states "Observed Item: RISK PANEL MISSING" in as many words,
+  and the surrounding fields sit under occlusion blocks. The pages are
+  skewed a couple of degrees, not quadrant-rotated, so the existing +/-12
+  deskew already covers them. No OCR, rotation, or escalation layer recovers
+  any of the fourteen.
+- **Refusing to approve a packet with no biometric page costs more than it
+  saves.** The existing guard routes biometric-missing packets to
+  NEEDS_REVIEW only when `ocr_used`. Extending it to digital packets was
+  measured: 149 digital packets have no biometric page and we approve 92 --
+  66 correctly, 11 catastrophically, 15 that should be review. Routing the
+  bucket to review trades 499 raw classification points for 274, about
+  -2.25 on the 80-point scale. A missing biometric page is a real document
+  property but it carries almost no signal about the flag.
+
+Train after round 7: **123.21/150** (cls 64.75, ext 42.63, cal 15.84,
+brier 0.104), 17 catastrophic false-approvals.
