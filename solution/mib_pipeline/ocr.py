@@ -150,6 +150,36 @@ def _detect_orientation(page) -> int:
     return result
 
 
+FORCED_QUADRANTS = (90, 270)
+
+
+def _resolve_orientation(page, dpi: int, psm: int):
+    """Decide a page's quadrant rotation when the upright render read nothing.
+
+    OSD is asked first, but on this corpus Tesseract's orientation confidence
+    almost never clears MIN_OSD_CONFIDENCE and half the calls abort outright
+    ("Too few characters"), so `_detect_orientation` alone leaves quadrant
+    rotation effectively unhandled. The fallback simply tries the two
+    quadrants that occur (180 and mirroring were measured to recover nothing)
+    and keeps one only if it turns an illegible page into a legible one.
+
+    Both halves of that are document properties: the trigger is an upright
+    render carrying no recognizable field label or typed pattern, and the
+    acceptance test is a strict improvement in legibility, so a page that
+    already reads is never rotated. Returns (orient, lines) so an accepted
+    trial's text is reused instead of being OCR'd a second time.
+    """
+    orient = _detect_orientation(page)
+    if orient:
+        return orient, None
+    for quadrant in FORCED_QUADRANTS:
+        lines = _ocr_once(page, dpi, psm, orient=quadrant)
+        if _legibility(lines) > 0:
+            _memo_for(page)["osd"][page.number] = quadrant
+            return quadrant, lines
+    return 0, None
+
+
 def _ocr_once(page, dpi: int, psm: int, orient: int = 0) -> List[str]:
     try:
         img = _render(page, dpi, orient=orient)
@@ -215,10 +245,12 @@ def ocr_page_lines(page) -> List[str]:
     first_dpi, first_psm = PASSES[0]
     upright = _ocr_once(page, first_dpi, first_psm, orient=0)
     orient = 0
+    rotated = None
     if _legibility(upright) == 0:
-        orient = _detect_orientation(page)
+        orient, rotated = _resolve_orientation(page, first_dpi, first_psm)
     if orient:
-        _absorb(_ocr_once(page, first_dpi, first_psm, orient=orient))
+        _absorb(rotated if rotated is not None
+                else _ocr_once(page, first_dpi, first_psm, orient=orient))
     else:
         _absorb(upright)
     for dpi, psm in PASSES[1:]:
@@ -326,6 +358,19 @@ def _escalation_variants(page, skip_segment: bool = False, deep: bool = True):
         yield "sparse400", run(base400, 11)
     except Exception:
         pass
+    # Quadrant re-reads. The ladder above varies threshold, contrast and
+    # resolution but every rung reads the page at one orientation, so a page
+    # whose rotation was missed upstream is unreadable at every rung. These
+    # two carry nearly all of the measured escalation gain (+0.93 of +1.00 on
+    # the low-confidence decile); a 400/600 dpi tail trialled alongside them
+    # bought the remaining 0.07 for three times the time and was dropped.
+    for quadrant in FORCED_QUADRANTS:
+        try:
+            rotated = _render(page, 300, orient=quadrant)
+        except Exception:
+            continue
+        yield "quadrant%d" % quadrant, run(rotated, 4)
+        yield "quadrant%d" % quadrant, run(rotated, 6)
 
 
 PACKET_ESCALATION_BUDGET_S = 75.0
