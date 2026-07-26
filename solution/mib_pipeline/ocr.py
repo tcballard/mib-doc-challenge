@@ -43,7 +43,12 @@ def _estimate_skew(img) -> float:
         return 0.0
     thumb = img.resize((img.width // 4 or 1, img.height // 4 or 1))
     best_angle, best_score = 0.0, -1.0
-    for angle in (-12, -9, -6, -4, -2, 0, 2, 4, 6, 9, 12):
+    # Sweep out to +/-24: pages skewed 15-20 degrees occur in this corpus and
+    # sat outside the old +/-12 window, so they were left crooked and read as
+    # unclassifiable. The extra angles are thumbnail rotations, which is why
+    # widening the range is affordable where widening the DPI ladder was not.
+    for angle in (-24, -20, -16, -12, -9, -6, -4, -2, 0,
+                  2, 4, 6, 9, 12, 16, 20, 24):
         rot = thumb.rotate(angle, expand=False, fillcolor=255)
         arr = np.asarray(rot, dtype=np.uint8)
         dark = (arr < 128).sum(axis=1).astype(float)
@@ -153,8 +158,8 @@ def _detect_orientation(page) -> int:
 FORCED_QUADRANTS = (90, 270)
 
 
-def _resolve_orientation(page, dpi: int, psm: int):
-    """Decide a page's quadrant rotation when the upright render read nothing.
+def _resolve_orientation(page, dpi: int, psm: int, base_legibility: int = 0):
+    """Decide a page's quadrant rotation when the upright render read poorly.
 
     OSD is asked first, but on this corpus Tesseract's orientation confidence
     almost never clears MIN_OSD_CONFIDENCE and half the calls abort outright
@@ -164,19 +169,30 @@ def _resolve_orientation(page, dpi: int, psm: int):
     and keeps one only if it turns an illegible page into a legible one.
 
     Both halves of that are document properties: the trigger is an upright
-    render carrying no recognizable field label or typed pattern, and the
-    acceptance test is a strict improvement in legibility, so a page that
-    already reads is never rotated. Returns (orient, lines) so an accepted
-    trial's text is reused instead of being OCR'd a second time.
+    render that read weakly, and the acceptance test is a strict improvement
+    in legibility over that upright read, so a page that already reads well is
+    never rotated. Returns (orient, lines) so an accepted trial's text is
+    reused instead of being OCR'd a second time.
+
+    The trigger is deliberately not "read *nothing*". Vertically typeset text
+    does not come back empty from an upright pass -- it comes back as a
+    trickle of stray characters that scores above zero -- so a zero-legibility
+    gate skipped exactly the rotated pages it was meant to catch. Comparing
+    against the upright score rather than against zero is what makes the wider
+    trigger safe.
     """
     orient = _detect_orientation(page)
     if orient:
         return orient, None
+    best_lines, best_quadrant, best_score = None, 0, base_legibility
     for quadrant in FORCED_QUADRANTS:
         lines = _ocr_once(page, dpi, psm, orient=quadrant)
-        if _legibility(lines) > 0:
-            _memo_for(page)["osd"][page.number] = quadrant
-            return quadrant, lines
+        score = _legibility(lines)
+        if score > best_score:
+            best_lines, best_quadrant, best_score = lines, quadrant, score
+    if best_quadrant:
+        _memo_for(page)["osd"][page.number] = best_quadrant
+        return best_quadrant, best_lines
     return 0, None
 
 
@@ -192,6 +208,9 @@ def _ocr_once(page, dpi: int, psm: int, orient: int = 0) -> List[str]:
 
 
 WEAK_YIELD_WORDS = 60
+# Legibility at or above which a page counts as read. Shared by the binarize
+# rung below and the quadrant trigger, so "weak" means one thing everywhere.
+WEAK_LEGIBILITY = 3
 BINARIZE_THRESHOLD = 120
 
 
@@ -246,8 +265,10 @@ def ocr_page_lines(page) -> List[str]:
     upright = _ocr_once(page, first_dpi, first_psm, orient=0)
     orient = 0
     rotated = None
-    if _legibility(upright) == 0:
-        orient, rotated = _resolve_orientation(page, first_dpi, first_psm)
+    base_legibility = _legibility(upright)
+    if base_legibility < WEAK_LEGIBILITY:
+        orient, rotated = _resolve_orientation(
+            page, first_dpi, first_psm, base_legibility)
     if orient:
         _absorb(rotated if rotated is not None
                 else _ocr_once(page, first_dpi, first_psm, orient=orient))
@@ -256,7 +277,7 @@ def ocr_page_lines(page) -> List[str]:
     for dpi, psm in PASSES[1:]:
         _absorb(_ocr_once(page, dpi, psm, orient=orient))
     if (sum(len(l.split()) for l in lines) < WEAK_YIELD_WORDS
-            or _legibility(lines) < 3):
+            or _legibility(lines) < WEAK_LEGIBILITY):
         _absorb(_ocr_binarized(page, 300, 4, orient=orient))
     if len(lines) < MIN_USEFUL_LINES:
         alt = _ocr_once(page, *FALLBACK, orient=orient)
