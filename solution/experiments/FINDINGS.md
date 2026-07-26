@@ -381,3 +381,33 @@ brier 0.104), 17 catastrophic false-approvals.
 
 Train after round 10: **124.82/150** (cls 65.52, ext 43.38, cal 15.93,
 brier 0.102), 17 catastrophic false-approvals.
+
+## Round 11: the note was the answer all along
+
+- **A parsed adjudicator finding matches the truth adjudication 293/293 on
+  train.** Where no note is found, adjudication accuracy is 0.693. The note is
+  not evidence to be weighed -- it is the answer, and it was only ever looked
+  for on pages the dispatcher could type by title. 329 packets had untyped
+  pages and no note.
+- **Recovering notes from untyped pages is worth +1.05**, the largest single
+  gain of the effort after the quadrant rungs: 124.82 -> **125.88** (cls 65.52
+  -> 66.24, cal 15.93 -> 16.25, brier 0.1019 -> 0.0937, accuracy 0.783 ->
+  0.794). Extraction is flat at 43.39: this is pure decision quality. 32 notes
+  recovered, **32 of 32 agreeing with truth** -- the oracle survives the
+  degraded pages intact. Calibration gains most of any change in this effort,
+  because a note-backed call is emitted confidently and is then right.
+- **The detector keys on the note's label vocabulary, never on a verdict
+  word.** `_extract_finding`'s fuzzy fallback matches bare DENI/DEMED/DEN1
+  anywhere in the head, and "SAMPLE DENIAL" is stamped across a large share of
+  the corpus. A verdict-word trigger would have read that watermark as a
+  finding on every page it crossed and handed those packets a fabricated
+  denial. The mechanism that makes the note recoverable through heavy OCR
+  noise is the same one that makes it dangerous to detect carelessly.
+- **The probe under-predicted this by an order of magnitude.** A crude
+  finding-matcher found a recoverable note on 1 of 30 sampled packets, and on
+  that basis the gain was expected to be tenths. The shipped detector is
+  stronger than the probe was, and the honest lesson is that a probe weaker
+  than the mechanism it is sizing produces a floor, not an estimate.
+
+Train after round 11: **125.88/150** (cls 66.24, ext 43.39, cal 16.25,
+brier 0.094), 17 catastrophic false-approvals.
