@@ -645,10 +645,33 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             # the same terms as everywhere else, and they carry OCR provenance,
             # so the provenance gate still refuses to let them outvote a
             # digital reading.
-            for k, v in _inline_fields(vis).items():
+            inl_u = _inline_fields(vis)
+            for k, v in inl_u.items():
                 if v and not _is_damage(v) and k not in untyped:
                     untyped[k] = v
                     prov_untyped[k] = p.ocr_used
+            # A fee receipt that lost its title is still a fee receipt. Without
+            # this the packet falls back to guessing "paid", which is the best
+            # constant (280 of 405 unobserved cases) but wrong the other 125
+            # times. Only a value from the closed fee vocabulary counts as
+            # having observed the fee, and a typed receipt seen earlier or
+            # later still wins.
+            if not rec.fee_observed:
+                fee_u = _kv_vertical(vis, {"Fee Status": "fee_status",
+                                           "Waiver Code": "waiver_code"})
+                for k, v in inl_u.items():
+                    fee_u.setdefault(k, v)
+                cand = correct_field("fee_status",
+                                     (fee_u.get("fee_status") or "").strip().lower())
+                if cand in FEE_VALUES:
+                    rec.fee_status = cand
+                    rec.fee_observed = True
+                    rec.field_sources["fee_status"] = "untyped"
+                    if fee_u.get("waiver_code") and not rec.waiver_code:
+                        rec.waiver_code = fee_u["waiver_code"].strip()
+            am_u = re.search(r"\$\s*([0-9][0-9,]*\.[0-9]{2})", text)
+            if am_u and not rec.fee_amount:
+                rec.fee_amount = am_u.group(1).replace(",", "")
 
     rec.scanned = not meaningful_visible
 
