@@ -304,6 +304,33 @@ def _norm_flags(value: str) -> str:
 _REASON_SPLIT = re.compile(r"reas[oa]?r?|resor|\breason\b", re.I)
 
 
+_NOTE_LABELS = ("adjudicator", "finding")
+
+
+def _looks_like_note(text: str) -> bool:
+    """True when a page carries the adjudicator note's own label vocabulary.
+
+    Keyed on the label and never on a verdict word. "SAMPLE DENIAL" is stamped
+    across a large share of this corpus, and `_extract_finding`'s fuzzy
+    fallback matches bare DENI/DEMED anywhere in the head, so a verdict-word
+    trigger would read that watermark as a finding on every page it crosses
+    and hand the packet a fabricated denial.
+    """
+    from .vocab import _canon, _edit_distance
+    c = _canon(text)[:2000]
+    if not c:
+        return False
+    for token in _NOTE_LABELS:
+        if token in c:
+            return True
+        n = len(token)
+        cap = max(1, int(0.3 * n))
+        for i in range(0, max(0, len(c) - n) + 1):
+            if _edit_distance(c[i:i + n], token, cap=cap + 1) <= cap:
+                return True
+    return False
+
+
 def _extract_finding(text: str):
     """Recover the adjudicator finding, tolerating OCR corruption.
 
@@ -649,6 +676,21 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 if v and not _is_damage(v) and k not in untyped:
                     untyped[k] = v
                     prov_untyped[k] = p.ocr_used
+            # An adjudicator note that lost its title is still an adjudicator
+            # note, and it is the strongest evidence a packet can carry: on
+            # train a parsed finding matches the truth adjudication 293 times
+            # out of 293, against 0.693 accuracy on packets where no note is
+            # found. A note page too degraded to type is the most expensive
+            # page in the corpus to miss. A typed note anywhere in the packet
+            # still wins; this only fills the gap.
+            if not rec.note.raw and _looks_like_note(text):
+                finding, reason = _extract_finding(text)
+                if finding:
+                    rec.note = Note(finding=finding, reason=reason, raw=text)
+                    fc_u = re.search(
+                        r"fee status is (paid|waived|unpaid|unknown)", text, re.I)
+                    if fc_u and not rec.fee_correction:
+                        rec.fee_correction = fc_u.group(1).lower()
 
     rec.scanned = not meaningful_visible
 
