@@ -62,8 +62,8 @@ own most recent arrival date, so the system works in any data era.
 
 | Section | Score |
 | --- | --- |
-| Classification | 65.4 / 80 |
-| Field extraction | 43.3 / 50 |
+| Classification | 65.5 / 80 |
+| Field extraction | 43.4 / 50 |
 | Confidence calibration | 15.9 / 20 |
 | **Deterministic total** | **124.8 / 150** |
 | Catastrophic false approvals | 17 / 1000 |
