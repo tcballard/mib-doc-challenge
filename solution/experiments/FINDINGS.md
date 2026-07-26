@@ -340,3 +340,44 @@ brier 0.104), 17 catastrophic false-approvals.
 
 Train after round 9: **124.58/150** (cls 65.41, ext 43.32, cal 15.85,
 brier 0.104), 17 catastrophic false-approvals.
+
+## Round 10: the pages we were throwing away
+
+- **The page-dispatch chain had no else branch.** Every page whose form title
+  none of the branches recognized contributed nothing at all -- 786 of 4159
+  pages, every one of them a scan. The title is the first casualty of a bad
+  scan: it is set larger across the top of the page and takes the worst of the
+  staining, while the field block below it often survives. MIB-000025 page 4
+  was producing `Case ID`, `Sponsor ID`, `Home World`, `Species Code` and
+  `Declared Purpose` cleanly, and all five were discarded for want of a form
+  name. Harvesting labelled pairs from those pages is worth **+0.24** and
+  moves all three score components (cls 65.41 -> 65.52, ext 43.32 -> 43.38,
+  cal 15.85 -> 15.93, brier 0.104 -> 0.102), with no change in catastrophics.
+  `applicant_name` gains the most, 0.855 -> 0.866.
+- **Consulted last, fill-only.** Harvested values sit at the end of every
+  `pick()` source list, so a recognized form always wins; they come from
+  visible lines only, so injection is excluded on the same terms as
+  everywhere else; and `_prov_of` reports them as OCR-derived, so the round-6
+  provenance gate still refuses to let them outvote a digital reading. The
+  fill-only-empty merge semantics -- a liability in rounds 6, 7 and 9 -- are
+  exactly the right behaviour here.
+- **Six reading techniques were measured and rejected first.** On the pages
+  that genuinely defeat the pipeline: RapidOCR PP-OCRv4 Chinese (24 legibility
+  vs Tesseract's 38), the same with English recognition weights (24 -- the
+  detector is the limit, not the recognizer), Sauvola local adaptive
+  thresholding (20), content-crop plus upscale (1 of 14 pages rescued),
+  RapidOCR at 300 and 400 dpi (2 and 1 of 14), and fuzzy title matching (3 of
+  14, one a false positive). The lesson is that the remaining loss is not
+  reachable by reading the image differently. It was reachable by not
+  discarding text already correctly read.
+- **Two measurement failures worth recording.** A parallel probe reported that
+  0 of 91 unclassified pages carried any readable field label; run
+  single-process the same pages carried three and five. Tesseract was hitting
+  its 12 s timeout under 4-way load and returning empty, and the false zero
+  nearly closed this avenue. Separately, killing a probe by process-name
+  pattern matched the killing shell itself, orphaning two tesseract processes
+  that then consumed half the CPU for two minutes underneath a running gate.
+  Contended measurements are not measurements.
+
+Train after round 10: **124.82/150** (cls 65.52, ext 43.38, cal 15.93,
+brier 0.102), 17 catastrophic false-approvals.
