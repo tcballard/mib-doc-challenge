@@ -296,3 +296,47 @@ brier 0.104), 17 catastrophic false-approvals.
 
 Train after round 8: **124.53/150** (cls 65.41, ext 43.27, cal 15.85,
 brier 0.104), 17 catastrophic false-approvals.
+
+## Round 9: the ladder audit, and a fix that worked for the wrong reason
+
+- **Leave-one-out audit of every escalation family.** Each family removed in
+  turn, full-train re-parse, scored against a no-drop control that reproduced
+  the shipped 124.53 exactly. Two families carry the ladder: the quadrant
+  rungs (-1.16) and sparse psm 11 (-0.77). The other five -- contrast,
+  upscale, threshold6, denoise, threshold -- are worth between -0.01 and
+  -0.08 each and **-0.27 together**, and removing all five makes the run
+  *slower* (3008 s vs 2949 s on the 431 escalating packets) because the
+  stopping rule then lets the ladder run deeper into what remains. Nothing
+  was deleted. The audit's value was negative space: the ladder's breadth is
+  exhausted, so no further threshold/contrast/resolution variant will help.
+- **No family costs meaningful time.** Largest saving from dropping anything
+  was 139 s out of 2949 (under 5%). An earlier claim that dropping denoise
+  saved 27% was wrong -- it compared runs on either side of a container
+  restart. Wall-clock across restarts is not comparable, and the control run
+  exists to catch exactly that.
+- **786 of 4159 pages (18.9%) cannot be classified at all**, and every one of
+  them is a scanned page: of 2896 pages with a usable text layer, the number
+  carrying a recognizable header but left unclassified is **zero**. The page
+  classifier is not the bottleneck. 1263 pages are scanned and 786 of those
+  (62%) defeat the pipeline completely. That is where the remaining
+  extraction loss lives.
+- **Widening the rotation trigger did not do what it was meant to do.**
+  Rendering unclassified pages showed 90-degree-rotated text, and the
+  quadrant trial only fired when the upright pass read *nothing* legible --
+  which vertical text never does, since it returns a trickle of stray
+  characters scoring above zero. Widening the trigger to a weak read, with
+  acceptance seeded by the upright score so a quadrant is taken only on
+  strict improvement, plus a deskew sweep widened from +/-12 to +/-24
+  degrees, recovered **2 pages out of 786** and +0.05 score. The hypothesis
+  is effectively disproven: those pages are stained, faded and redacted as
+  well as rotated, and straightening them does not make them readable.
+- **It is kept anyway, for an unrelated reason: it is 0.51 s/PDF faster**
+  (4.026 vs 4.534 on the 150-packet stratified sample). Straighter renders
+  need fewer fallback and binarize passes downstream. Projected 5000-packet
+  run 20,131 s -- faster than the 20,737 s baseline from *before* the
+  quadrant rungs were added, so the corpus now gets more depth in less time.
+  Slack against the tier-2 shed is 3268 s, against the governor's target
+  3868 s, against the hard cap 9868 s.
+
+Train after round 9: **124.58/150** (cls 65.41, ext 43.32, cal 15.85,
+brier 0.104), 17 catastrophic false-approvals.
