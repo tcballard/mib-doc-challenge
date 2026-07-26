@@ -461,6 +461,10 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
     sponsor_names: List[str] = []
     prov_intake: Dict[str, bool] = {}
     prov_registry: Dict[str, bool] = {}
+    # Fields read off pages whose form title never survived OCR. Kept apart
+    # from the typed dicts because they are consulted last and only ever fill.
+    untyped: Dict[str, str] = {}
+    prov_untyped: Dict[str, bool] = {}
     _pflags = {"bio": False, "sponsor": False}
     src_ocr: Dict[str, bool] = {}
 
@@ -626,6 +630,26 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
                 rec.fee_correction = fc.group(1).lower()
             rec.present_pages.append("note")
 
+        else:
+            # A page whose title none of the branches above recognized. On
+            # heavily degraded scans the title is usually the first casualty --
+            # it is set in a larger face across the top and takes the worst of
+            # the staining -- while the field block below it can still read
+            # cleanly ("Home World: Wolf-1061c", "Species Code: ANDROMEDAN").
+            # Nearly a fifth of pages in this corpus end up here, and until now
+            # every field on them was discarded for want of a form name.
+            #
+            # These readings are consulted last and can only fill a field no
+            # typed page supplied, so a recognized form always wins. They come
+            # from visible lines only, so hidden-text injection is excluded on
+            # the same terms as everywhere else, and they carry OCR provenance,
+            # so the provenance gate still refuses to let them outvote a
+            # digital reading.
+            for k, v in _inline_fields(vis).items():
+                if v and not _is_damage(v) and k not in untyped:
+                    untyped[k] = v
+                    prov_untyped[k] = p.ocr_used
+
     rec.scanned = not meaningful_visible
 
     # Large colored verdict stamps (measured 162/162 truth-consistent) as an
@@ -657,6 +681,8 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             return _pflags["bio"]
         if src_name == "sponsor":
             return _pflags["sponsor"]
+        if src_name == "untyped":
+            return prov_untyped.get(fieldname, True)
         return rec.ocr_used
 
     # Identity fields where an exact digital reading outranks page precedence.
@@ -706,12 +732,12 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
         "visa_class": rec.sponsor_letter_visa,
         "declared_purpose": rec.sponsor_letter_purpose,
     }
-    rec.applicant_name = pick("applicant_name", ("intake", intake), ("biometric", biometric), ("registry", registry), ("sponsor", sponsor_d))
-    rec.species_code = pick("species_code", ("intake", intake), ("biometric", biometric), ("registry", registry))
-    rec.home_world = pick("home_world", ("intake", intake), ("registry", registry))
-    rec.visa_class = pick("visa_class", ("intake", intake), ("sponsor", sponsor_d))
-    rec.arrival_date = pick("arrival_date", ("intake", intake), ("registry", registry))
-    rec.declared_purpose = pick("declared_purpose", ("intake", intake), ("sponsor", sponsor_d))
+    rec.applicant_name = pick("applicant_name", ("intake", intake), ("biometric", biometric), ("registry", registry), ("sponsor", sponsor_d), ("untyped", untyped))
+    rec.species_code = pick("species_code", ("intake", intake), ("biometric", biometric), ("registry", registry), ("untyped", untyped))
+    rec.home_world = pick("home_world", ("intake", intake), ("registry", registry), ("untyped", untyped))
+    rec.visa_class = pick("visa_class", ("intake", intake), ("sponsor", sponsor_d), ("untyped", untyped))
+    rec.arrival_date = pick("arrival_date", ("intake", intake), ("registry", registry), ("untyped", untyped))
+    rec.declared_purpose = pick("declared_purpose", ("intake", intake), ("sponsor", sponsor_d), ("untyped", untyped))
     rec.registry_status = registry.get("registry_status", "")
 
     # If no biometric slip was recognized but the packet has OCR pages, the slip
