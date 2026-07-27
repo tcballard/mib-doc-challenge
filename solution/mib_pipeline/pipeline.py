@@ -399,6 +399,7 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
     start = time.monotonic()
     allow_escalation = True
     deep = True
+    tier2_strikes = 0
     processed_this_run = 0
 
     import multiprocessing as mp
@@ -425,6 +426,20 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
 
             # Governor: project finish time from THIS run's pace (checkpointed
             # packets cost no time now); degrade before the budget is at risk.
+            #
+            # Tier-2 shedding requires the projection to breach on two
+            # CONSECUTIVE checks. A single batch is not a pace estimate: the
+            # corpus is processed in sorted order, batch composition varies,
+            # and on train the first 200 cases pace ~60% hotter than the
+            # corpus average. Extrapolating that one batch 5x tripped the shed
+            # every run, silently stripping tier-2 depth from the remaining
+            # 80% of the corpus and costing 0.61 (all 72 degraded cases sat in
+            # batches 2-5; zero in batch 1 -- the batch boundary is the
+            # fingerprint). One extra full-depth batch against a false alarm
+            # costs a few hundred seconds of a multi-thousand-second margin;
+            # a real overrun still trips one check later, and the hard
+            # escalation-off tier at the contract budget stays single-check
+            # because the 30,000 s cap is not negotiable.
             processed_this_run += len(batch)
             elapsed = time.monotonic() - start
             remaining = len(pdfs) - len(done)
@@ -432,8 +447,16 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
                 projected = elapsed + (elapsed / processed_this_run) * remaining
                 if projected > total_budget:
                     allow_escalation = False
+                    print(f"governor: escalation off after {processed_this_run} "
+                          f"(projected {projected:.0f}s > {total_budget:.0f}s)")
                 elif projected > tier2_budget:
-                    deep = False
+                    if tier2_strikes:
+                        deep = False
+                        print(f"governor: tier-2 shed after {processed_this_run} "
+                              f"(projected {projected:.0f}s > {tier2_budget:.0f}s, 2nd strike)")
+                    tier2_strikes += 1
+                else:
+                    tier2_strikes = 0
     finally:
         ckpt_f.close()
 
