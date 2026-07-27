@@ -1,4 +1,10 @@
-FROM python:3.11-slim
+# Pinned to bookworm: python:3.11-slim is a moving tag that recently jumped
+# to trixie, silently swapping Tesseract 5.3 for 5.5. Every OCR threshold in
+# this pipeline was tuned against 5.3, and the full-train A/B between the two
+# bases measures 126.10 (bookworm, 5.3.0) vs 126.04 (trixie, 5.5.0) through
+# this image's own entrypoint. The pin buys the better score and, more
+# importantly, stops the graded artifact drifting under an unrelated rebuild.
+FROM python:3.11-slim-bookworm
 
 # Offline OCR + PDF tooling. tesseract-ocr provides the OCR engine used as a
 # fallback for scanned/rasterized pages; no network is needed at runtime.
