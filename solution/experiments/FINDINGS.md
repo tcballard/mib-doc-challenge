@@ -447,3 +447,40 @@ brier 0.094), 17 catastrophic false-approvals.
 Train after round 12: **125.88/150 through the production entrypoint**
 (cls 66.24, ext 43.39, cal 16.25, brier 0.094), 17 catastrophic
 false-approvals, production rows byte-identical to the reference harness.
+
+## Round 13: finishing the note channel, and two seams that refused
+
+- **A destroyed verdict can be inferred from its reason.** Reasons come from
+  a closed generator vocabulary and every family maps to one finding on every
+  parsed note in the corpus -- except review-only-flag, revoked-sponsor and
+  embargo-world, which do not decide the outcome alone and are excluded.
+  Matching is by distinctive words (two surviving at 35% noise, or one of
+  disqualifying length) because OCR damage concentrates in single words and
+  whole-phrase distance fails exactly there; words shared between families
+  are excluded so the SAMPLE DENIAL watermark can never carry a family, and
+  matching two families infers nothing. **14 findings recovered, 14 of 14
+  agreeing with truth** -- five of them on untyped pages where round 11 found
+  the note but not the verdict. The note oracle now stands at 339/339.
+  Production-confirmed: **125.88 -> 126.19** (+0.24 cls, +0.08 cal, brier
+  0.094 -> 0.092), 17 catastrophics, validator clean.
+- **The illegible_biometrics seam is real but this corpus keeps it.** Truth
+  assigns the flag when the slip cannot be read (~630 weighted points across
+  223 packets; we emit it only where a typed slip shows damage). A bare
+  missing-page trigger costs 108 wrong flags on packets whose slip is simply
+  absent. The precise separator -- the slip's own label vocabulary, on the
+  note detector's design -- fired on 22 of 196 candidates with 5 true against
+  17 false: the slip's labels are obliterated on exactly the pages that need
+  the flag, and 9-character tokens fuzzy-matched across pages of garble
+  manufacture hits. Gate 125.68 vs 125.88; reverted. The note design
+  transferred its discipline, not its success: notes announce themselves
+  with "Finding:" plus a closed-vocabulary verdict; slips have no such line.
+- **Reading the fee receipt off untyped pages also reverted** (125.27-era
+  measurement, -0.04): it raised fee accuracy and calibration and still lost,
+  because setting fee_observed suppresses the fee_unknown review path and
+  correctly-hedged packets became confidently wrong ones. Evidence that is
+  not reliable enough to beat the hedge does damage even when it is more
+  accurate on average -- the EV lesson from round 3, rearriving via parsing.
+
+Train after round 13, production entrypoint: **126.19/150** (cls 66.48,
+ext 43.39, cal 16.33, brier 0.092), 17 catastrophic false-approvals,
+66-minute full-depth run, governor silent.
