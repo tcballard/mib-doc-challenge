@@ -411,3 +411,39 @@ brier 0.102), 17 catastrophic false-approvals.
 
 Train after round 11: **125.88/150** (cls 66.24, ext 43.39, cal 16.25,
 brier 0.094), 17 catastrophic false-approvals.
+
+## Round 12: the governor was strangling the graded path
+
+- **Production scored 0.61 below the identical code for four verified runs,
+  and the cause was our own budget governor.** The corpus is processed in
+  sorted 200-packet batches and the finish time was projected from the first
+  batch alone. The first 200 train cases pace well above corpus average, so
+  the tier-2 shed tripped at the first check every run -- silently stripping
+  the quadrant rungs and the lowered escalation bar from 80% of the corpus.
+  The fingerprint that cornered it: all 72 degraded cases sat in batches 2-5,
+  zero in batch 1. Two runs were byte-identical because the trip landed the
+  same way each time; a deadline raise changed nothing (proving per-packet
+  timing innocent); mp.Pool contention reproduced the GOOD results, not the
+  bad ones. Four experiments to exonerate everything except the governor.
+- **Fix: tier-2 shedding needs the projection over budget on two consecutive
+  checks.** One batch is not a pace estimate. A real overrun still sheds one
+  batch later, costing a few hundred seconds of a multi-thousand-second
+  margin; the escalation-off tier at the contract budget stays single-check
+  because the 30,000 s cap is not negotiable. Both sheds now log when they
+  fire so a graded run leaves evidence. Result: production 125.27 -> 125.88,
+  and the production row set is now byte-identical to the reference harness
+  (72 differing cases -> 0). On the hidden 5000-packet set this fix is worth
+  more than 0.61: there the false first-batch trip would have degraded 24 of
+  25 batches.
+- **Engine-swap avenue closed by three architectures.** On the residual
+  unreadable pages, Tesseract's segmenter+LSTM, PP-OCR's DB detector, and
+  CRAFT character-region detection (plus a CRAFT-detect/Tesseract-recognise
+  hybrid isolating the detector) all fail identically -- CRAFT finds ~10
+  boxes on pages carrying dozens of lines, and handing its boxes to a
+  different recogniser moves nothing. tessdata_best rescued 1 page of 14;
+  the legacy OEM-0 engine rescued 0 and reads strictly less than the LSTM.
+  The remaining loss on those pages is not an engine-selection problem.
+
+Train after round 12: **125.88/150 through the production entrypoint**
+(cls 66.24, ext 43.39, cal 16.25, brier 0.094), 17 catastrophic
+false-approvals, production rows byte-identical to the reference harness.

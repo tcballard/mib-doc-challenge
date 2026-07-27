@@ -11,7 +11,7 @@ dead ends, is on the solution branch.
 
 ## 1. What this is
 
-A deterministic, trust-aware evidence engine. It scores **125.9/150** on the
+A deterministic, trust-aware evidence engine. It scores **125.9/150**, verified through the production entrypoint, on the
 training set with 17 catastrophic false approvals in 1000 cases. No ML model
 makes any decision — we tried that, measured it, and it lost (details in
 section 5).
