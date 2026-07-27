@@ -331,6 +331,55 @@ def _looks_like_note(text: str) -> bool:
     return False
 
 
+# Canonical reason phrases and the finding each one accompanies, verified
+# against every successfully parsed note on train. Only families that map to
+# a single finding are listed: "review-only risk flag present" (34 NR / 2 DEN),
+# "revoked sponsor" (12 DEN / 2 NR) and "embargo home world" (9 DEN / 1 NR)
+# are deliberately absent because the reason alone does not decide them.
+# Distinctive words per family: no word appears in two families ("damaged"
+# and "packet" are shared corpus-wide and deliberately excluded), so a match
+# on one family cannot be a partial match on another.
+_REASON_FINDINGS = (
+    (("clean", "exception", "qualified"), "APPROVED"),
+    (("approval", "surviving"), "APPROVED"),
+    (("denial", "supported", "registry"), "DENIED"),
+    (("disqualifying",), "DENIED"),
+    (("transit", "authorize"), "DENIED"),
+    (("mandatory", "unpaid"), "DENIED"),
+    (("contains", "contradictory"), "NEEDS_REVIEW"),
+    (("arrival", "missing", "trusted"), "NEEDS_REVIEW"),
+    (("status", "unknown"), "NEEDS_REVIEW"),
+)
+
+
+def _finding_from_reason(text: str):
+    """Infer the finding from the note's reason line when the verdict word is
+    destroyed. Reasons come from a closed generator vocabulary; a family
+    matches when two of its distinctive words (one suffices at 10+ chars,
+    e.g. "disqualifying") each survive at 35% edit noise. Word-level matching
+    tolerates damage concentrated in one word, where whole-phrase distance
+    does not. Fires only when exactly one family matches: two, or none,
+    infer nothing -- and the words shared between families are excluded from
+    the lists, so the SAMPLE DENIAL watermark ("denial" alone) or a stray
+    "damaged" can never carry a family by itself."""
+    from .vocab import _canon, _edit_distance
+    words = [_canon(w) for w in re.findall(r"[^\W\d_]+", text) if len(w) >= 4]
+    if not words:
+        return None
+    hits = set()
+    for keys, finding in _REASON_FINDINGS:
+        matched = 0
+        for k in keys:
+            cap = max(1, int(0.35 * len(k)))
+            for w in words:
+                if abs(len(w) - len(k)) <= cap and _edit_distance(w, k, cap=cap + 1) <= cap:
+                    matched += 1
+                    break
+        if matched >= 2 or (matched == 1 and len(keys) == 1 and len(keys[0]) >= 10):
+            hits.add(finding)
+    return hits.pop() if len(hits) == 1 else None
+
+
 def _extract_finding(text: str):
     """Recover the adjudicator finding, tolerating OCR corruption.
 
@@ -360,6 +409,11 @@ def _extract_finding(text: str):
         return "NEEDS_REVIEW", ""
     if denied:
         return "DENIED", ""
+    # Verdict word destroyed entirely: fall back to the reason phrase, which
+    # is longer than the verdict and often survives when it does not.
+    inferred = _finding_from_reason(text)
+    if inferred:
+        return inferred, ""
     return None, ""
 
 
