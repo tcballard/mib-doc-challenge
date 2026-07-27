@@ -387,21 +387,7 @@ def _escalation_variants(page, skip_segment: bool = False, deep: bool = True):
         yield "quadrant%d" % quadrant, run(rotated, 6)
 
 
-# Wall-clock deadline for one packet's escalation ladder. It is wall clock,
-# not CPU time, so it is sensitive to whatever else is running: under the real
-# `run()` the four pool workers compete with a parent that rewrites the whole
-# prediction file after every batch, and packets that finish their ladder
-# comfortably when parsed standalone were hitting this deadline and shedding
-# depth instead. That cost 0.61 -- production scored 125.27 against 125.88 for
-# the identical commit parsed without a competing parent, differing on 81
-# cases across every field.
-#
-# Raising it is close to free. The batch governor still caps total runtime, so
-# this only decides how long a single hard packet may keep trying; the corpus
-# runs at 2.96 s/PDF against a 6.0 contract, and the slowest packet observed
-# was 89 s. The deadline exists to stop one pathological packet eating the run,
-# and 180 s still does that while letting a merely contended one finish.
-PACKET_ESCALATION_BUDGET_S = 180.0
+PACKET_ESCALATION_BUDGET_S = 75.0
 
 
 def make_escalated_ocr_fn(base_pages=None, deep: bool = True):
