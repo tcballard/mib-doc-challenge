@@ -400,6 +400,7 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
     allow_escalation = True
     deep = True
     tier2_strikes = 0
+    esc_strikes = 0
     processed_this_run = 0
 
     import multiprocessing as mp
@@ -446,9 +447,20 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
             if allow_escalation and processed_this_run and remaining:
                 projected = elapsed + (elapsed / processed_this_run) * remaining
                 if projected > total_budget:
-                    allow_escalation = False
-                    print(f"governor: escalation off after {processed_this_run} "
-                          f"(projected {projected:.0f}s > {total_budget:.0f}s)")
+                    # Also two-strike. This tier fired on the first batch of
+                    # the 5000-packet validation run -- a cold-cache batch at
+                    # 5.76 s/PDF projected 28,803 s, escalation switched off
+                    # for the remaining 96% of the corpus, and the run then
+                    # finished at ~14,000 s: sixteen thousand seconds under
+                    # the cap it was protecting. The trip threshold is the
+                    # 80% target, not the hard cap, so even that projection
+                    # FIT the cap at full depth. One cold batch is not a
+                    # pace estimate either.
+                    if esc_strikes:
+                        allow_escalation = False
+                        print(f"governor: escalation off after {processed_this_run} "
+                              f"(projected {projected:.0f}s > {total_budget:.0f}s, 2nd strike)")
+                    esc_strikes += 1
                 elif projected > tier2_budget:
                     if tier2_strikes:
                         deep = False
