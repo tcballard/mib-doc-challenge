@@ -206,6 +206,9 @@ class Record:
     present_pages: List[str] = field(default_factory=list)
     ocr_used: bool = False
     scanned: bool = False
+    # An unclassifiable page carried the biometric slip's label vocabulary:
+    # the slip is present but unreadable, which truth marks illegible_biometrics.
+    bio_slip_illegible: bool = False
     identity_conflict: bool = False
     stamp_verdict: str = ""
     risk_panel_damaged: bool = False
@@ -305,6 +308,39 @@ _REASON_SPLIT = re.compile(r"reas[oa]?r?|resor|\breason\b", re.I)
 
 
 _NOTE_LABELS = ("adjudicator", "finding")
+
+# Label vocabulary unique to the biometric scan slip. "SCAN TAB" is absent
+# deliberately: it also appears on fee receipts, and this signature exists to
+# distinguish an unreadable slip from every other unreadable page.
+_SLIP_LABELS = ("biometric", "scanslip", "speciesmatch", "observedflags",
+                "observeditem")
+
+
+def _looks_like_slip(text: str) -> bool:
+    """True when an unclassifiable page carries the slip's own label vocabulary.
+
+    Same design as `_looks_like_note`: fuzzy-match the form's labels through
+    OCR noise, never key on values. The point is to separate "the slip is in
+    the packet but unreadable" (truth marks these `illegible_biometrics`) from
+    "the slip is not in the packet" (flags genuinely unknowable) -- the two
+    populations that a bare missing-biometric-page trigger conflates, at a
+    measured cost of 108 wrong flags.
+    """
+    from .vocab import _canon, _edit_distance
+    c = _canon(text)[:2500]
+    if not c:
+        return False
+    if re.search(r"\bb\s?[-–—._]?\s?1[38]\b", text, re.I):
+        return True
+    for token in _SLIP_LABELS:
+        if token in c:
+            return True
+        n = len(token)
+        cap = max(1, int(0.3 * n))
+        for i in range(0, max(0, len(c) - n) + 1):
+            if _edit_distance(c[i:i + n], token, cap=cap + 1) <= cap:
+                return True
+    return False
 
 
 def _looks_like_note(text: str) -> bool:
@@ -683,6 +719,8 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             # found. A note page too degraded to type is the most expensive
             # page in the corpus to miss. A typed note anywhere in the packet
             # still wins; this only fills the gap.
+            if p.ocr_used and not rec.bio_slip_illegible and _looks_like_slip(text):
+                rec.bio_slip_illegible = True
             if not rec.note.raw and _looks_like_note(text):
                 finding, reason = _extract_finding(text)
                 if finding:

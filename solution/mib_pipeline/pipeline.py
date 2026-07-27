@@ -121,6 +121,15 @@ def parse_one(path: str, use_ocr: bool = True, allow_escalation: bool = True,
             recover_risk_flags(rec, path, pages=final_pages, deep=deep)
         except Exception:
             pass
+    # A slip that is in the packet but too degraded to read IS the flag: the
+    # truth labels these packets illegible_biometrics, and no recovery cascade
+    # can read a value off a page that carries none. Applied last so any real
+    # flag the cascades did recover wins, and only when the slip was never
+    # readably present -- a typed biometric page means the slip was read.
+    if (rec.bio_slip_illegible and (rec.risk_flags or "none") == "none"
+            and "biometric" not in rec.present_pages):
+        rec.risk_flags = "illegible_biometrics"
+        rec.field_sources["risk_flags"] = "slip_signature"
     return rec
 
 
