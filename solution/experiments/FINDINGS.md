@@ -484,3 +484,36 @@ false-approvals, production rows byte-identical to the reference harness.
 Train after round 13, production entrypoint: **126.19/150** (cls 66.48,
 ext 43.39, cal 16.33, brier 0.092), 17 catastrophic false-approvals,
 66-minute full-depth run, governor silent.
+
+## Round 14: closing the book
+
+- **The restoration channel is closed by 16 measured variants.** Background
+  field-flattening, ruled-line removal, CLAHE (before and after flattening),
+  percentile stretch, Sauvola on cleaned images, unsharp masking, hard
+  whitening, blob removal, 2x stacks, and Richardson-Lucy deconvolution:
+  ceiling 1 of 14 pages rescued, always the same page, against a >=4 bar.
+  The decisive negative is deconvolution recovering no stroke structure from
+  the dominant blur population -- the glyphs are physically merged blobs, and
+  a filter cannot add ink that was never scanned. With three OCR decoder
+  architectures agreeing earlier, the residual ~786 pages are certified
+  information-dead at the pixel level by every classical means available.
+- **The one "rescue" was a timeout artifact, and the class it suggested is
+  empty.** The rescued page carries crisp human-readable text that cost raw
+  Tesseract 67 s of layout analysis against a 12 s cap -- but a 60-page probe
+  with a 90 s timeout on the current pipeline rescued 0 and found not one
+  page needing over 12 s: the shipped deskew already tames layout-analysis
+  blowup. A promising-looking mechanism, sized honestly, is a non-mechanism.
+- **A basic text-layer reader scores 104.72** (no OCR at all): 320 packets
+  fully correct, but 40 catastrophic false-approvals -- blind to every flag
+  on a scanned slip. The OCR stack is worth +21.5 points and -23
+  catastrophics, and the cheap-first cascade already runs at page
+  granularity, so digital packets cost 0.31 s and the OCR budget is spent
+  almost exactly where the catastrophic-prevention evidence lives.
+- **The image is pinned to bookworm** (Tesseract 5.3.0): 126.10 in-image vs
+  126.04 on the trixie base the moving python:3.11-slim tag had silently
+  drifted to. The pin recovers most of the tuning-environment gap and stops
+  the graded artifact changing under a rebuild.
+
+Final: **126.19 host / 126.10 in-image**, 17 catastrophic false-approvals,
+validator clean, 571 MB image, ~3.97 s/PDF full depth with the governor
+silent. Basic reader 104.72; everything above it is measured mechanism.
