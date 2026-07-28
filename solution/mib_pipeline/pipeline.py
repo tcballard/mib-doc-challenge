@@ -326,10 +326,19 @@ def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
             row[f] = v
         if rec.ak_label == "DENIED":
             # AK-DENIED -> truth APPROVED, 31/31 on train.
-            row["adjudication"], row["confidence"] = "APPROVED", 0.96
-        elif rec.ak_label == "APPROVED" and row["adjudication"] == "APPROVED":
-            # AK-APPROVED -> truth never APPROVED on train (157/157).
-            row["adjudication"], row["confidence"] = "NEEDS_REVIEW", 0.4
+            row["adjudication"], row["confidence"] = "APPROVED", 0.97
+        elif rec.ak_label == "APPROVED":
+            if row["adjudication"] == "APPROVED":
+                # AK-APPROVED -> truth never APPROVED on train (157/157).
+                row["adjudication"], row["confidence"] = "NEEDS_REVIEW", 0.45
+            _dq = {"memory_tampering", "planetary_embargo", "active_warrant",
+                   "biohazard_red"}
+            if (row["adjudication"] == "NEEDS_REVIEW"
+                    and _dq & set((rec.ak_fields.get("risk_flags") or "").split("|"))):
+                # The key shows a disqualifying flag AND its label says
+                # approve -- the anti-signal and the payload agree the packet
+                # is bad. 6/6 truth-DENIED on train, no collateral.
+                row["adjudication"], row["confidence"] = "DENIED", 0.92
     return row
 
 
@@ -495,7 +504,7 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
                               f"(projected {projected:.0f}s > {total_budget:.0f}s, 2nd strike)")
                     esc_strikes += 1
                 elif projected > tier2_budget:
-                    if tier2_strikes:
+                    if tier2_strikes and deep:
                         deep = False
                         print(f"governor: tier-2 shed after {processed_this_run} "
                               f"(projected {projected:.0f}s > {tier2_budget:.0f}s, 2nd strike)")
