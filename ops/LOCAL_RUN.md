@@ -42,8 +42,18 @@ shasum -a 256 -c data/downloads.sha256   # must print OK
 unzip -q mib-doc-challenge-public-data-v2026-07-07.zip
 ```
 
-Expands to `data/train/`, `data/validation/`, and the two label/manifest CSVs
-(the CSVs are already in git; the zip overwrites them with identical content).
+Expands to `data/train/`, `data/validation/`, and the two label/manifest CSVs.
+Both CSVs are already tracked in git and the zip overwrites them, so expect
+`git status` to show `data/validation_manifest.csv` modified afterwards.
+That is benign: the tracked copy is a perfect 1:1 with the corpus (5000 rows,
+no missing or extra case ids), and the only column that can differ, `pages`,
+is referenced by nothing -- `validate_submission.py` ignores it and the
+pipeline never reads the manifest at all. Restore it so teleport's clean-tree
+check and later commits are not tripped up:
+
+```bash
+git checkout -- data/validation_manifest.csv data/train_labels.csv
+```
 
 Verify before spending four hours on it:
 
