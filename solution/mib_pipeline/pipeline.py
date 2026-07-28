@@ -297,6 +297,7 @@ def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
     world_out = _prefix_truncate(rec.home_world, HOME_WORLDS)
     purpose_out = _prefix_truncate(rec.declared_purpose, PURPOSES)
     row = {
+        "_reason": reason,
         "case_id": rec.case_id,
         "applicant_name": _clean_text(name_out),
         "species_code": _clean_text(rec.species_code),
@@ -546,6 +547,13 @@ def _write_predictions(records: List[Record], out: Path) -> None:
         for r in results:
             f.write(json.dumps({k: r[k] for k in OUTPUT_FIELDS}, sort_keys=True) + "\n")
     os.replace(tmp, out)
+    if os.environ.get("MIB_DEBUG_REASONS"):
+        with open(str(out) + ".reasons", "w") as f:
+            for r in results:
+                f.write(json.dumps({"case_id": r["case_id"],
+                                    "reason": r.get("_reason", ""),
+                                    "adjudication": r["adjudication"],
+                                    "confidence": r["confidence"]}) + "\n")
 
 
 def main(argv=None):
