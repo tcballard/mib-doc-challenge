@@ -28,9 +28,23 @@ while true; do
   # (No setsid/background poll: setsid is Linux-only and absent on macOS, where
   # this now runs after a teleport. Foreground is simpler and equally
   # restart-proof given the checkpoint mount.)
-  docker run --rm --network none --cpus 4 --memory 8g \
+  #
+  # 8 workers / 8 CPUs, not the graded image's 4-vCPU default. This machine's
+  # arm64 Docker VM runs the pipeline at ~8.5 s/PDF on 4 workers -- over the
+  # 6 s/PDF governor contract, which would trip escalation-off and ship
+  # DEGRADED predictions. Measured 8-worker rate is 5.04 s/PDF, back under the
+  # escalation-off threshold (5.64) and matching the reference box's canonical
+  # validation pace (~5.52 s/PDF): escalation stays ON, at most one tier-2
+  # shed, exactly the expected regime. Parallelism is output-neutral; it only
+  # restores the governor's designed behavior on slower hardware. The shipped
+  # image and its entrypoint are unchanged -- this override lives only in the
+  # local generation runner. run() is called directly so it still checkpoints
+  # to /tmp and resumes identically.
+  docker run --rm --network none --cpus 8 --memory 7g \
     -v "$REPO/data/validation":/in:ro -v /tmp/val_out:/out -v /tmp/ckpt5000:/tmp \
-    "$IMG" /in /out/predictions.jsonl >> /tmp/docker_val.log 2>&1 || true
+    --entrypoint python3 "$IMG" \
+    -c "from mib_pipeline.pipeline import run; run('/in','/out/predictions.jsonl',workers=8)" \
+    >> /tmp/docker_val.log 2>&1 || true
 done
 cd "$REPO"
 python3 scripts/validate_submission.py --submission /tmp/val_out/predictions.jsonl --pdf-dir data/validation | tail -2

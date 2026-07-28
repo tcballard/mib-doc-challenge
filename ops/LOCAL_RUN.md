@@ -66,6 +66,16 @@ interruption and it resumes from the checkpoint on the host mount
 (The runner launches the container in the foreground; the original detached
 `setsid` launch was Linux-only and hung on macOS.)
 
+**Why 8 workers.** The runner overrides the graded image's 4-vCPU default and
+runs `run(..., workers=8)` on `--cpus 8`. This arm64 Docker VM does ~8.5 s/PDF
+on 4 workers -- over the 6 s/PDF governor contract, which would trip
+escalation-off and ship degraded predictions. Measured 8-worker rate is
+~5.0 s/PDF (projected ~7 h for 5000), back under the escalation-off threshold
+and matching the reference box's canonical validation pace, so escalation
+stays on with at most one tier-2 shed. Parallelism is output-neutral -- it
+only restores the governor's intended behavior on slower hardware. The shipped
+image is untouched; this override is local to prediction generation.
+
 `ops/healthcheck.sh` gives one-glance state (checkpoint rows, docker, load) at
 any time and changes nothing.
 
