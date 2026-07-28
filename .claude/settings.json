@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash ops/healthcheck.sh 2>/dev/null | head -25" }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git fetch:*)",
+      "Bash(docker ps:*)", "Bash(docker info:*)", "Bash(docker images:*)",
+      "Bash(wc:*)", "Bash(cat /proc/loadavg)", "Bash(bash ops/healthcheck.sh)",
+      "Bash(python3 scripts/validate_submission.py:*)",
+      "Bash(python3 scripts/evaluate.py:*)",
+      "Bash(python3 solution/experiments/measure_train.py:*)"
+    ]
+  }
+}
