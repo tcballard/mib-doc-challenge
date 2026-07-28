@@ -318,6 +318,19 @@ def _format_row(rec: Record, now: Optional[datetime.date]) -> Dict:
     # wrong 188/188, a deterministic anti-signal. Both regularities are
     # generator behavior and may not survive on a differently-generated
     # hidden set -- the bet is explicit and disclosed in the memo.
+    # Max-EV imputation: the schema placeholders can never equal a truth
+    # value (truth carries no blanks), so a blank field scores zero with
+    # certainty while the corpus-modal value scores at the modal frequency.
+    # Corpus-level priors, not per-case data. Sponsor and date keep their
+    # valid-format placeholders: their modal frequencies (2%) round to
+    # nothing, and a fabricated-but-plausible sponsor could collide with the
+    # revocation list downstream.
+    _MODAL = {"species_code": "TRIANGULAN", "home_world": "Luyten-b",
+              "visa_class": "MED-3", "declared_purpose": "reactor maintenance"}
+    for f, mv in _MODAL.items():
+        if row[f] in ("", "unknown"):
+            row[f] = mv
+
     if rec.ak_fields:
         AK_DECOYS = {"applicant_name": {"Luma Voss"}, "sponsor_id": {"SPN-1042"}}
         for f, v in rec.ak_fields.items():

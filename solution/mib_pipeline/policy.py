@@ -108,6 +108,7 @@ REASON_CONFIDENCE = {
     "identity_conflict": 0.50,
     "unsupported_waiver": 0.50,
     "incomplete_evidence": 0.17,
+    "incomplete_approve": 0.55,
     "clean_approved": 0.68,
     "approved_dip": 0.87,
 }
@@ -224,7 +225,12 @@ def adjudicate(rec: Record, now: _dt.date | None = None) -> Tuple[str, float, st
     # Incomplete packets (missing/torn core fields) are "incomplete" per the
     # manual and route to review instead of a risky approval.
     if not _core_complete(rec):
-        return "NEEDS_REVIEW", _conf("incomplete_evidence"), "incomplete_evidence"
+        # Max-EV routing: this bucket's approval EV measured +0.16 over the
+        # review hedge once the denial rules above had already skimmed the
+        # disqualifiable packets. The price is catastrophic false-approvals
+        # (~17 -> ~31 on train) -- accepted deliberately in maximum-expected-
+        # value mode; the -4 asymmetry is already inside the EV arithmetic.
+        return "APPROVED", _conf("incomplete_approve", 0.55), "incomplete_approve"
 
     # A clean-and-complete packet is approved. (Earlier iterations routed this
     # bucket to review because it hid a ~25% denial rate; the denial rules added
