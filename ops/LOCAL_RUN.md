@@ -11,11 +11,15 @@ with the steps below.
 
 - Docker, running.
 - ~8 GB free disk (2.9 GB zip + ~3 GB expanded + ~600 MB image).
-- Docker must be able to give the container **4 CPUs and 8 GB RAM** --
-  `run_validation.sh` passes `--cpus 4 --memory 8g`. On Docker Desktop the
-  default VM allocation is often lower; raise it in Settings > Resources
-  first, or the run gets OOM-killed hours in. Check with
+- Docker must be able to give the container **8 CPUs and 7 GB RAM** --
+  `run_validation.sh` passes `--cpus 8 --memory 7g` (see "Why 8 workers"
+  below; 4 workers is too slow on an arm64 Docker VM and trips the governor).
+  On Docker Desktop the default VM allocation is often lower; raise it in
+  Settings > Resources first, or the run gets OOM-killed hours in. Check with
   `docker info --format '{{.NCPU}} CPUs / {{.MemTotal}} bytes'`.
+  If the host cannot supply 8 CPUs, do not just drop to 4 and hope -- measure
+  the resulting s/PDF first and confirm it stays under the 5.64 escalation-off
+  threshold, or the run ships degraded predictions.
 - Timing and OCR are only valid on an idle box: under contention Tesseract
   hits its 12 s per-page timeout and returns empty, which reads as a real
   score drop. Keep loadavg < 2 and do not run this alongside other heavy work.
