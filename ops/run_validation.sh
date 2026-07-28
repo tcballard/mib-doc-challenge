@@ -27,6 +27,22 @@ docker image inspect "$IMG" >/dev/null 2>&1 || docker build --network=host -t "$
 CPUS=$(docker info --format '{{.NCPU}}' 2>/dev/null || echo 4)
 [ -z "$CPUS" ] && CPUS=4
 [ "$CPUS" -gt 8 ] && CPUS=8
+# MIB_FORCE_FULL_DEPTH=1 raises the governor's budget so it never sheds.
+#
+# Only for hosts too slow to hold the 6 s/PDF contract, where the governor
+# would otherwise switch escalation off and emit DEGRADED rows that still look
+# like a clean 5000-row file. The budget exists to honour the *graded* runtime
+# cap; local prediction generation is not being graded on wall clock, so the
+# honest trade is to spend the hours and keep full depth. It changes no
+# threshold, no rule, and nothing in the shipped image -- it only stops the
+# pacing logic from firing. Leave it unset on a host that already paces under
+# ~5.6 s/PDF: there the governor is already quiet and this would mask a real
+# regression in pace.
+PYPRE=""
+if [ "${MIB_FORCE_FULL_DEPTH:-0}" = "1" ]; then
+  PYPRE="p.BUDGET_S_PER_PDF=20.0; "
+  echo "runner: FULL DEPTH FORCED (governor budget raised; escalation cannot shed)"
+fi
 echo "runner: --cpus $CPUS, workers 8"
 fails=0
 while true; do
@@ -53,7 +69,7 @@ while true; do
   if docker run --rm --network none --cpus "$CPUS" --memory 7g \
       -v "$REPO/data/validation":/in:ro -v /tmp/val_out:/out -v /tmp/ckpt5000:/tmp \
       --entrypoint python3 "$IMG" \
-      -c "from mib_pipeline.pipeline import run; run('/in','/out/predictions.jsonl',workers=8)" \
+      -c "import mib_pipeline.pipeline as p; ${PYPRE}p.run('/in','/out/predictions.jsonl',workers=8)" \
       >> /tmp/docker_val.log 2>&1; then
     fails=0
   else
