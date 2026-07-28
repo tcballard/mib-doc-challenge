@@ -548,12 +548,37 @@ def _write_predictions(records: List[Record], out: Path) -> None:
             f.write(json.dumps({k: r[k] for k in OUTPUT_FIELDS}, sort_keys=True) + "\n")
     os.replace(tmp, out)
     if os.environ.get("MIB_DEBUG_REASONS"):
+        by_id = {rec.case_id: rec for rec in records}
         with open(str(out) + ".reasons", "w") as f:
             for r in results:
+                rec = by_id.get(r["case_id"])
+                feat = {}
+                if rec is not None:
+                    pp = set(rec.present_pages or [])
+                    feat = {
+                        "ocr": bool(rec.ocr_used), "scanned": bool(rec.scanned),
+                        "pages": sorted(pp),
+                        "bio": "biometric" in pp, "sponsor_pg": "sponsor" in pp,
+                        "registry_pg": "registry" in pp, "fee_pg": "fee" in pp,
+                        "note_pg": "note" in pp,
+                        "fee_observed": bool(rec.fee_observed),
+                        "waiver": bool((rec.waiver_code or "").strip() not in ("", "N/A")),
+                        "registry_status": (rec.registry_status or "")[:20],
+                        "has_ak": bool(rec.ak_fields), "ak_label": rec.ak_label,
+                        "note_finding": rec.note.finding or "",
+                        "identity_conflict": bool(rec.identity_conflict),
+                        "n_fields_blank": sum(1 for x in ("applicant_name",
+                            "species_code", "home_world", "visa_class",
+                            "sponsor_id", "arrival_date", "declared_purpose")
+                            if not getattr(rec, x)),
+                        "visa": r["visa_class"], "fee": r["fee_status"],
+                        "flags": r["risk_flags"],
+                    }
                 f.write(json.dumps({"case_id": r["case_id"],
                                     "reason": r.get("_reason", ""),
                                     "adjudication": r["adjudication"],
-                                    "confidence": r["confidence"]}) + "\n")
+                                    "confidence": r["confidence"],
+                                    "feat": feat}) + "\n")
 
 
 def main(argv=None):
