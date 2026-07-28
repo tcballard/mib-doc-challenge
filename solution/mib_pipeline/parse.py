@@ -258,6 +258,13 @@ class Record:
     present_pages: List[str] = field(default_factory=list)
     ocr_used: bool = False
     scanned: bool = False
+    # Planted answer-key line, harvested for the emission layer. The field
+    # manual marks these untrusted; on train they measure 94.8% true once two
+    # planted decoy values are excluded, and their adjudication label is
+    # wrong 188 times out of 188 -- a deterministic anti-signal. Never
+    # consulted by the policy engine; applied only at emission.
+    ak_fields: Dict[str, str] = field(default_factory=dict)
+    ak_label: str = 
     identity_conflict: bool = False
     stamp_verdict: str = ""
     risk_panel_damaged: bool = False
