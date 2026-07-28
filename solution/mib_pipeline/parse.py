@@ -25,6 +25,58 @@ def _visa_normalize(v: str) -> str:
     return repaired.replace(" ", "")
 SPONSOR_RE = re.compile(r"\bSPN-\d{3,}\b")
 DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+# Constrained character repair for fixed-format fields. OCR renders digits as
+# letter shapes (O for 0, l for 1, S for 5); a sponsor code or date carrying
+# one such character fails its strict regex outright and the whole reading is
+# discarded. Repair is confined to positions the FORMAT proves must be digits,
+# and runs only after the strict pattern has already failed -- so it can turn
+# an invalid reading into a valid one but can never alter a reading that
+# already matches. Applied to whole tokens anchored by their format (the
+# SPN- prefix, the ####-##-## shape), never to free text.
+_DIGITFIX = str.maketrans({"O": "0", "o": "0", "Q": "0", "D": "0",
+                           "I": "1", "l": "1", "|": "1", "!": "1",
+                           "S": "5", "s": "5", "B": "8", "Z": "2",
+                           "z": "2", "G": "6"})
+_SPONSOR_LOOSE = re.compile(r"\bSPN[\s\-–—._]*([0-9OoQDIl|!SsBZzG]{4})\b")
+_DATE_LOOSE = re.compile(
+    r"\b([0-9OoQDIl|!SsBZzG]{4})[-–—.]([0-9OoQDIl|!SsBZzG]{2})[-–—.]"
+    r"([0-9OoQDIl|!SsBZzG]{2})\b")
+
+
+def find_sponsor(text: str):
+    """Strict sponsor match first; on failure, repair letter-shaped digits in
+    an SPN-anchored token. Returns the match text or None."""
+    m = SPONSOR_RE.search(text or "")
+    if m:
+        return m.group(0)
+    lm = _SPONSOR_LOOSE.search(text or "")
+    if lm:
+        digits = lm.group(1).translate(_DIGITFIX)
+        if digits.isdigit():
+            return f"SPN-{digits}"
+    return None
+
+
+def find_date(text: str):
+    """Strict ISO-date match first; on failure, repair letter-shaped digits in
+    a date-shaped token and validate the calendar date. Returns the date
+    string or None."""
+    m = DATE_RE.search(text or "")
+    if m:
+        return m.group(1)
+    lm = _DATE_LOOSE.search(text or "")
+    if lm:
+        parts = [g.translate(_DIGITFIX) for g in lm.groups()]
+        if all(p.isdigit() for p in parts):
+            cand = "-".join(parts)
+            try:
+                import datetime as _dt
+                _dt.date.fromisoformat(cand)
+                return cand
+            except ValueError:
+                return None
+    return None
 FINDING_RE = re.compile(r"Finding:\s*(APPROVED|DENIED|NEEDS_REVIEW)\.?\s*Reason:\s*(.*)", re.I)
 
 # Vertical "label\nvalue" fields, keyed by the label text.
@@ -491,12 +543,12 @@ def _pattern_sweep(lines: List[str]) -> Dict[str, str]:
     for ln in lines:
         if _is_damage(ln):
             continue
-        m = SPONSOR_RE.search(ln)
-        if m:
-            out.setdefault("sponsor_id", m.group(0))
-        m = DATE_RE.search(ln)
-        if m and _valid_date(m.group(1)):
-            out.setdefault("arrival_date", m.group(1))
+        sp = find_sponsor(ln)
+        if sp:
+            out.setdefault("sponsor_id", sp)
+        dt = find_date(ln)
+        if dt and _valid_date(dt):
+            out.setdefault("arrival_date", dt)
         m = VISA_RE.search(_visa_normalize(ln))
         if m:
             out.setdefault("visa_class", m.group(1))
@@ -669,9 +721,9 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
 
         elif title.startswith("Sponsor Attestation") or "Sponsor Attestation" in text or "attests that" in text:
             _pflags["sponsor"] = p.ocr_used
-            m = SPONSOR_RE.search(text)
-            if m:
-                rec.sponsor_letter_id = m.group(0)
+            sp = find_sponsor(text)
+            if sp:
+                rec.sponsor_letter_id = sp
             nm = re.search(r"attests that (.+?) is expected", text)
             if nm:
                 rec.sponsor_letter_name = nm.group(1).strip()
@@ -802,6 +854,8 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
             v = d.get(fieldname)
             if not v:
                 continue
+            if fieldname == "arrival_date" and not DATE_RE.search(v):
+                v = find_date(v) or v
             bad = _is_damage(v) or (
                 fieldname == "arrival_date"
                 and not (DATE_RE.search(v) and _valid_date(DATE_RE.search(v).group(1))))
@@ -936,7 +990,7 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
         (intake.get("sponsor_id"), prov_intake.get("sponsor_id", rec.ocr_used)),
         (rec.sponsor_letter_id, _pflags["sponsor"]),
         (rec.sponsor_id, rec.ocr_used)]
-    spn_ok = [(m.group(0), o) for c, o in spn_cands if (m := SPONSOR_RE.search(c or ""))]
+    spn_ok = [(sp, o) for c, o in spn_cands if (sp := find_sponsor(c or ""))]
     if spn_ok:
         # Same digital preference as pick(): a four-digit sponsor code is one
         # transposed character away from a different real sponsor, so an exact

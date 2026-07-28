@@ -48,12 +48,19 @@ PLACEHOLDER_DATE = "1900-01-01"
 
 def _clean_sponsor(v: str) -> str:
     m = re.search(r"SPN-\d{4}", v or "")
-    return m.group(0) if m else PLACEHOLDER_SPONSOR
+    if m:
+        return m.group(0)
+    from .parse import find_sponsor
+    return find_sponsor(v or "") or PLACEHOLDER_SPONSOR
 
 
 def _clean_date(v: str) -> str:
     m = re.search(r"\d{4}-\d{2}-\d{2}", v or "")
     if not m:
+        from .parse import find_date
+        repaired = find_date(v or "")
+        if repaired:
+            return repaired
         return PLACEHOLDER_DATE
     try:
         datetime.date.fromisoformat(m.group(0))
