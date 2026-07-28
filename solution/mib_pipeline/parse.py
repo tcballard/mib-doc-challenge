@@ -264,7 +264,7 @@ class Record:
     # wrong 188 times out of 188 -- a deterministic anti-signal. Never
     # consulted by the policy engine; applied only at emission.
     ak_fields: Dict[str, str] = field(default_factory=dict)
-    ak_label: str = 
+    ak_label: str = ""
     identity_conflict: bool = False
     stamp_verdict: str = ""
     risk_panel_damaged: bool = False
