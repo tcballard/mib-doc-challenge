@@ -11,6 +11,14 @@ with the steps below.
 
 - Docker, running.
 - ~8 GB free disk (2.9 GB zip + ~3 GB expanded + ~600 MB image).
+- Docker must be able to give the container **4 CPUs and 8 GB RAM** --
+  `run_validation.sh` passes `--cpus 4 --memory 8g`. On Docker Desktop the
+  default VM allocation is often lower; raise it in Settings > Resources
+  first, or the run gets OOM-killed hours in. Check with
+  `docker info --format '{{.NCPU}} CPUs / {{.MemTotal}} bytes'`.
+- Timing and OCR are only valid on an idle box: under contention Tesseract
+  hits its 12 s per-page timeout and returns empty, which reads as a real
+  score drop. Keep loadavg < 2 and do not run this alongside other heavy work.
 - A checkout of `tcballard/mib-doc-challenge` (teleport requires the same
   repository, clean git state, and the branch already pushed).
 
