@@ -1,7 +1,13 @@
 # Root-level build for graders pointing `docker build` at the repository root
 # (scripts/run_docker_submission.py expects a Dockerfile here). Mirrors
 # solution/Dockerfile with paths prefixed.
-FROM python:3.11-slim
+#
+# Base pin must stay in lockstep with solution/Dockerfile: python:3.11-slim is a
+# moving tag that recently jumped to trixie, silently swapping Tesseract 5.3 for
+# 5.5. Every OCR threshold here was tuned against 5.3, and the full-train A/B
+# measures 126.10 (bookworm, 5.3.0) vs 126.04 (trixie, 5.5.0). This is the file
+# graders build, so an unpinned tag here would drift the graded artifact.
+FROM python:3.11-slim-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       tesseract-ocr \
