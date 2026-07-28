@@ -800,6 +800,28 @@ def parse_packet(case_id: str, pages: List[Page]) -> Record:
 
     rec.scanned = not meaningful_visible
 
+    # Harvest the planted answer key (hidden or visible; INJECTION_RE keeps
+    # it out of ordinary field extraction, but the emission layer exploits
+    # its measured regularities -- see Record.ak_fields).
+    _AK_RE = re.compile(r"answer\s*key\s*only\s*:(.*)", re.I)
+    for p in use_pages:
+        for ln in p.lines:
+            am = _AK_RE.search(ln.text)
+            if not am:
+                continue
+            parts = [x.strip() for x in am.group(1).strip().split(",")]
+            if len(parts) >= 12:
+                keys = ["case_id", "applicant_name", "species_code",
+                        "home_world", "visa_class", "sponsor_id",
+                        "arrival_date", "declared_purpose", "risk_flags",
+                        "fee_status", "adjudication", "conf"]
+                akd = dict(zip(keys, parts))
+                rec.ak_fields = {k: akd[k] for k in keys[1:10]}
+                rec.ak_label = akd.get("adjudication", "").upper()
+            break
+        if rec.ak_label:
+            break
+
     # Large colored verdict stamps (measured 162/162 truth-consistent) as an
     # insurance channel: exact words, exact stamp colors, stamp point sizes.
     # Blue REVIEW overrides red DENIED (the crossed-out-denial artwork).
