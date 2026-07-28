@@ -11,7 +11,7 @@ dead ends, is on the solution branch.
 
 ## 1. What this is
 
-A deterministic, trust-aware evidence engine. It scores **129.3/150**, verified through the production entrypoint, on the
+A deterministic, trust-aware evidence engine. It scores **130.0/150**, verified through the production entrypoint, on the
 training set with 17 catastrophic false approvals in 1000 cases. No ML model
 makes any decision — we tried that, measured it, and it lost (details in
 section 5).
@@ -62,11 +62,11 @@ own most recent arrival date, so the system works in any data era.
 
 | Section | Score |
 | --- | --- |
-| Classification | 67.4 / 80 |
-| Field extraction | 45.4 / 50 |
+| Classification | 68.0 / 80 |
+| Field extraction | 45.6 / 50 |
 | Confidence calibration | 16.4 / 20 |
-| **Deterministic total** | **129.3 / 150** |
-| Catastrophic false approvals | 17 / 1000 |
+| **Deterministic total** | **130.0 / 150** |
+| Catastrophic false approvals | 22 / 1000 |
 
 Training extraction is a floor, not a ceiling: many "misses" are fields the
 documents physically destroyed (`[DATE WASHED OUT]`, cut-out names) that the

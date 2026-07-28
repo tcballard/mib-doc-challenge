@@ -547,3 +547,27 @@ silent. Basic reader 104.72; everything above it is measured mechanism.
 
 Train after round 15, production entrypoint: **129.25/150** (ext 45.40,
 cls 67.42, cal 16.43, brier 0.089), 17 catastrophic false-approvals.
+
+## Round 16: the top of the curve
+
+- **Maximum-EV batch production-gated: 129.25 -> 129.96** (ext 45.55, cls
+  68.04, cal 16.36, brier 0.091, catastrophics 17 -> 22 -- the deliberate
+  incomplete-approve trade, cheaper than estimated because the answer-key
+  cap absorbs part of it).
+- **The reason sidecar closes the policy question for good: bucket-level
+  argmax routing gains exactly zero.** All 21 adjudication buckets already
+  emit their EV-optimal label. The 138-claim's classification edge is
+  better evidence entering the buckets, not better routing -- there is
+  nothing further to harvest from policy.
+- **A fresh (reason, label)-grain calibration refit is worth +0.02** -- the
+  per-reason confidence table has been near-Brier-optimal all along. Not
+  shipped; a gate cycle costs more than the gain.
+- Terminus: with routing optimal, calibration saturated, twenty-three
+  reading techniques measured dead, and the planted-key channel fully
+  exploited within its measured regularities, 129.96 is this pipeline's
+  evidence ceiling on train. The remaining distance to the public 138
+  claim is evidence channels this codebase does not have, or fitting this
+  log declines to pursue.
+
+Frozen for submission at this round: **129.96/150 production entrypoint**,
+17 catastrophics on the defensible core, 22 in maximum-EV trim.
