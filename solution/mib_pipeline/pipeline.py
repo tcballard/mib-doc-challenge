@@ -387,15 +387,20 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
     done = {cid: r for cid, r in done.items() if cid in stems}
     todo = [p for p in pdfs if Path(p).stem not in done]
 
-    total_budget = BUDGET_S_PER_PDF * len(pdfs) * BUDGET_SAFETY
-    # Tier-2 depth sheds first (at 0.78x the raw contract = 0.975x
-    # total_budget), full escalation second (at 0.80x = total_budget): a
-    # two-step degradation instead of one cliff. The first tier sat at 0.72x
-    # when the fleet ran 4.1 s/PDF; at the measured 3.45 s/PDF it was shedding
-    # proven depth a full 1.7 s/PDF short of the contract on any corpus with a
-    # heavier scanned mix than train, so it moves out to 0.78 (trip at 4.68
-    # s/PDF) while the escalation-off tier and the per-packet cap stand.
-    tier2_budget = BUDGET_S_PER_PDF * len(pdfs) * 0.78
+    # Degradation thresholds. The two sheds exist to fire in ORDER: tier-2
+    # depth first at the 80% pacing target, all escalation only in genuine
+    # hard-cap danger. They were once 600 s apart (0.78x vs 0.80x contract),
+    # which meant any corpus hot enough to trip one blew through both in the
+    # same check and the "graduated" ladder jumped straight to cheap-layers-
+    # only -- observed on the 5000-packet validation set, which paces ~15%
+    # heavier than train at full depth (projected 27.6k s): escalation died
+    # at the second check while sixteen thousand seconds of cap sat unused.
+    # Now: tier-2 sheds at the target and buys ~10% pace; escalation-off sits
+    # at 94% of the hard cap, a margin sized to the two-batch reaction
+    # latency, with the per-batch prediction rewrite bounding a worst-case
+    # overrun to the tail batch.
+    total_budget = BUDGET_S_PER_PDF * len(pdfs) * 0.94
+    tier2_budget = BUDGET_S_PER_PDF * len(pdfs) * BUDGET_SAFETY
     start = time.monotonic()
     allow_escalation = True
     deep = True
