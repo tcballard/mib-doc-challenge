@@ -54,12 +54,17 @@ ls data/validation | wc -l    # expect 5000
 ## 3. Run it
 
 ```bash
-bash ops/run_validation.sh
+caffeinate -i bash ops/run_validation.sh
 ```
 
-Builds `mib-solution:submit` from `solution/` and processes all 5000 packets.
-Restart-proof: rerun the same command after any interruption and it resumes
-from `/tmp/ckpt5000`. Done when it prints `VALIDATION_RUN_DONE`.
+`caffeinate -i` keeps the Mac awake for the multi-hour run. The runner builds
+`mib-solution:submit` from `solution/` and processes all 5000 packets in a
+foreground container. Restart-proof: rerun the same command after any
+interruption and it resumes from the checkpoint on the host mount
+`/tmp/ckpt5000`. Done when it prints `VALIDATION_RUN_DONE`.
+
+(The runner launches the container in the foreground; the original detached
+`setsid` launch was Linux-only and hung on macOS.)
 
 `ops/healthcheck.sh` gives one-glance state (checkpoint rows, docker, load) at
 any time and changes nothing.
