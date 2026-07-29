@@ -51,7 +51,11 @@ def _clean_sponsor(v: str) -> str:
     if m:
         return m.group(0)
     from .parse import find_sponsor
-    return find_sponsor(v or "") or PLACEHOLDER_SPONSOR
+    # find_sponsor's strict pattern tolerates short reads (SPN-\d{3,}); the
+    # schema does not. A read that can't fill four digits is a lost digit we
+    # cannot reinvent, so it degrades to the placeholder like a blank.
+    s = find_sponsor(v or "") or ""
+    return s if re.fullmatch(r"SPN-\d{4}", s) else PLACEHOLDER_SPONSOR
 
 
 def _clean_date(v: str) -> str:
