@@ -20,10 +20,12 @@ revive_docker || { echo "dockerd failed to start; see /tmp/dockerd.log"; exit 1;
 docker image inspect "$IMG" >/dev/null 2>&1 || docker build --network=host -t "$IMG" "$REPO/solution"
 while true; do
   revive_docker || { sleep 30; continue; }
-  n=$(wc -l < /tmp/val_out/predictions.jsonl 2>/dev/null || echo 0); [ -z "$n" ] && n=0
+  n=0; [ -f /tmp/val_out/predictions.jsonl ] && n=$(wc -l < /tmp/val_out/predictions.jsonl)
   [ "$n" -ge 5000 ] && break
+  # setsid detaches from the terminal on Linux; macOS has no setsid, plain background works.
+  SETSID=""; command -v setsid >/dev/null 2>&1 && SETSID="setsid"
   docker ps -q --filter ancestor="$IMG" | grep -q . || \
-    setsid docker run --rm --network none --cpus 4 --memory 8g \
+    $SETSID docker run --rm --network none --cpus 4 --memory 8g \
       -v "$REPO/data/validation":/in:ro -v /tmp/val_out:/out -v /tmp/ckpt5000:/tmp \
       "$IMG" /in /out/predictions.jsonl > /tmp/docker_val.log 2>&1 &
   sleep 120
