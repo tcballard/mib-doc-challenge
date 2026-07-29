@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.." || exit 1
 echo "== repo =="
 git log --oneline -1
 git status --porcelain | head -5
-echo "== expected baseline: train 126.19 host / 126.10 in-image, 17 catastrophics =="
+echo "== train: 129.96 frozen submission config; 126.19 clean-core regression gate =="
 echo "== validation run state =="
 ck=/tmp/ckpt5000/mib_run_checkpoint.jsonl
 [ -f "$ck" ] && echo "checkpoint rows: $(wc -l < "$ck")" || echo "no checkpoint yet"
