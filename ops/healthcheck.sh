@@ -19,4 +19,4 @@ for f in /tmp/docker_val*.log; do
   [ -f "$f" ] && grep -H "governor:" "$f"
 done
 echo "== load =="
-cat /proc/loadavg
+[ -r /proc/loadavg ] && cat /proc/loadavg || sysctl -n vm.loadavg
