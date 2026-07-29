@@ -12,7 +12,9 @@ dead ends, is on the solution branch.
 ## 1. What this is
 
 A deterministic, trust-aware evidence engine. It scores **130.0/150**, verified through the production entrypoint, on the
-training set with 17 catastrophic false approvals in 1000 cases. No ML model
+training set with 22 catastrophic false approvals in 1000 cases — 17 from
+the defensible core plus five from a deliberate expected-value trade,
+both accounted for in section 4. No ML model
 makes any decision — we tried that, measured it, and it lost (details in
 section 5).
 
@@ -114,15 +116,20 @@ an approval.
   training. A private test with new embargoed worlds and no adjudicator note
   would slip through. The note path and the registry "EMBARGO REVIEW" status
   — both stated in-document — are the generalizable backstops.
-- **17 catastrophic false approvals per 1000.** The price of EV-optimal
-  approval on a bucket with residual label noise. Fourteen of the seventeen
-  are risk-flag misses, and we rendered every page of all fourteen to check:
-  eleven have no biometric page in the file at all, and the biometric slip in
-  one of the remaining three states "Observed Item: RISK PANEL MISSING" in as
-  many words. The denial evidence is not degraded, it is absent. Refusing to
-  approve any packet missing its biometric page was measured and costs about
-  2.25 classification points to save eleven, because 66 packets are correctly
-  approved without one.
+- **22 catastrophic false approvals per 1000, in two distinct parts.**
+  Seventeen are the core's price for EV-optimal approval on a bucket with
+  residual label noise. Fourteen of those seventeen are risk-flag misses,
+  and we rendered every page of all fourteen to check: eleven have no
+  biometric page in the file at all, and the biometric slip in one of the
+  remaining three states "Observed Item: RISK PANEL MISSING" in as many
+  words. The denial evidence is not degraded, it is absent. Refusing to
+  approve any packet missing its biometric page was measured and costs
+  about 2.25 classification points to save eleven, because 66 packets are
+  correctly approved without one. The remaining five come from routing the
+  incomplete-evidence bucket to approval instead of the review hedge — a
+  knowing trade the scoring matrix prices in our favor (+0.16
+  classification net of the -4-per-case penalty), taken with eyes open and
+  reversible by one routing constant.
 
 ## 5. What we tried, with numbers
 
