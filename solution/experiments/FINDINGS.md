@@ -520,11 +520,13 @@ silent. Basic reader 104.72; everything above it is measured mechanism.
 
 ## Round 15: the competition channel
 
-- **Two public competitor submissions were read** (both in the official
-  repo's submission queue). Their architectures converge on ours; the score
-  gap above ~130 is substantially one channel: the corpus plants an "ANSWER
-  KEY ONLY:" line in 188 of 1000 packets as injection bait, and the bait is
-  badly made. Measured against truth: field payloads 94.8% accurate once two
+- **Two public submissions in the official repo's queue were reviewed** —
+  public information, used as public information and credited where an
+  idea was taken. Their architectures converge on ours; the score gap
+  above ~130 is substantially one channel: the corpus plants an "ANSWER
+  KEY ONLY:" line in 188 of 1000 packets as injection bait, and the
+  planted content follows measurable generator regularities. Measured
+  against truth: field payloads 94.8% accurate once two
   planted decoy values are excluded (Luma Voss 0/19, SPN-1042 0/10 --
   derived from our own train evidence, not copied), beating our extracted
   row on 148 of 188 carrying packets against 1; and the adjudication label
