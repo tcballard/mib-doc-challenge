@@ -25,7 +25,8 @@ while true; do
   # setsid detaches from the terminal on Linux; macOS has no setsid, plain background works.
   SETSID=""; command -v setsid >/dev/null 2>&1 && SETSID="setsid"
   docker ps -q --filter ancestor="$IMG" | grep -q . || \
-    $SETSID docker run --rm --network none --cpus 4 --memory 8g \
+    $SETSID docker run --rm --network none --cpus "${MIB_CPUS:-4}" --memory 8g \
+      ${MIB_WORKERS:+-e MIB_WORKERS="$MIB_WORKERS"} \
       -v "$REPO/data/validation":/in:ro -v /tmp/val_out:/out -v /tmp/ckpt5000:/tmp \
       "$IMG" /in /out/predictions.jsonl > /tmp/docker_val.log 2>&1 &
   sleep 120

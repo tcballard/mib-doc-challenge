@@ -415,7 +415,11 @@ def run(input_dir: str, output_path: str, workers: Optional[int] = None) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if workers is None:
-        workers = max(1, min(4, (os.cpu_count() or 2)))
+        env_workers = os.environ.get("MIB_WORKERS", "")
+        if env_workers.isdigit() and int(env_workers) > 0:
+            workers = int(env_workers)
+        else:
+            workers = max(1, min(4, (os.cpu_count() or 2)))
 
     # Resume from checkpoint if a previous interrupted run left one.
     done: Dict[str, Record] = {}
