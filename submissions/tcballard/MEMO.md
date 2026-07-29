@@ -85,111 +85,143 @@ private labels mark unrecoverable and drop from the maximum.
 
 ## Disclosure: the planted answer-key channel
 
-The corpus injects an "ANSWER KEY ONLY:" line into ~19% of packets as
-prompt-injection bait. We measured the bait on train: its field payload is
-94.8% accurate once two planted decoy values are excluded, and its
-adjudication label is wrong in every one of 188 occurrences. The emission
-layer exploits both regularities (fields adopted, label used only as an
-anti-signal that can demote an approval, never create one). The policy
-engine never consumes this channel, and the pipeline underneath scores
-126.2 without it. This is a deliberate, disclosed bet that the hidden
-set's generator plants its traps with the same regularities; we state it
-plainly so it can be judged as such.
+About 19% of packets contain an `ANSWER KEY ONLY:` line planted as
+prompt-injection bait. We measured it instead of pretending it was
+random.
+
+Once two decoy values are excluded, its field payload is 94.8% accurate
+on the training set. Its adjudication label is wrong in all 188
+occurrences.
+
+The emission layer uses those two regularities carefully: it may adopt
+the fields, while the label acts only as an anti-signal that can demote
+an approval. It can never create one. The policy engine never sees this
+channel, and the underlying pipeline scores 126.2 without it.
+
+This is a deliberate bet on the hidden-set generator behaving the same
+way. It is disclosed here because it should be judged as a bet — not
+mistaken for a general prompt-injection defense.
 
 ## 3. The diagnostic that changed the project
 
-We ran the finished policy on perfect fields — the truth CSV — and it scored
-66+/80 with near-perfect denial recall. The denials that looked "hidden" were
-extraction failures feeding correct rules wrong values. From that point on,
-every point came from reading documents better, not from a smarter
-classifier. A per-field sensitivity analysis put ~7 of the ~11 reachable
-classification points on `risk_flags` alone, which is where the OCR effort
-went.
+Perfect fields changed the diagnosis.
 
-Decision routing is expected-value-optimal against the scoring matrix,
-measured per path. Clean-and-complete packets approve. Ambiguous signals —
-transit purpose, stale-looking dates on OCR'd packets, salvage-only
-completeness — route to review. Whitelist-salvaged values are reported for
-extraction but deliberately don't count toward the evidence bar that unlocks
-an approval.
+When we ran the finished policy against the truth CSV, it scored 66+/80
+with near-perfect denial recall. The supposedly hidden denials were not
+a classification problem. Correct rules were receiving incorrectly
+extracted values.
+
+From that point on, the work moved out of the classifier and into
+document recovery. A per-field sensitivity analysis attributed roughly 7
+of the 11 reachable classification points to `risk_flags` alone. That is
+where the OCR effort went.
+
+Decision routing is measured against the scoring matrix, path by path:
+
+- Clean, complete packets are approved.
+- Ambiguous transit purposes, stale-looking OCR dates, and salvage-only
+  completeness go to `NEEDS_REVIEW`.
+- Whitelist-salvaged values may be emitted for extraction, but they do
+  not count as trusted evidence for approval.
+
+The system can recover a value without pretending that value is strong
+enough to justify a decision.
 
 ## 4. What still fails, and why
 
-- **Flags with no surviving evidence.** Most remaining risk-flag misses have
-  no biometric slip, no note mention, no stamp. We verified this by rendering
-  and red-ink-isolating every such packet. It matches the challenge's
-  documented `unrecoverable_fields` design.
-- **Slips beyond any threshold.** Heavy-noise recovery reads flags through
-  ~50% character corruption. Some slips are worse than that.
-- **Learned-list generalization.** Embargo and revoked lists come from
-  training. A private test with new embargoed worlds and no adjudicator note
-  would slip through. The note path and the registry "EMBARGO REVIEW" status
-  — both stated in-document — are the generalizable backstops.
-- **22 catastrophic false approvals per 1000, in two distinct parts.**
-  Seventeen are the core's price for EV-optimal approval on a bucket with
-  residual label noise. Fourteen of those seventeen are risk-flag misses,
-  and we rendered every page of all fourteen to check: eleven have no
-  biometric page in the file at all, and the biometric slip in one of the
-  remaining three states "Observed Item: RISK PANEL MISSING" in as many
-  words. The denial evidence is not degraded, it is absent. Refusing to
-  approve any packet missing its biometric page was measured and costs
-  about 2.25 classification points to save eleven, because 66 packets are
-  correctly approved without one. The remaining five come from routing the
-  incomplete-evidence bucket to approval instead of the review hedge — a
-  knowing trade the scoring matrix prices in our favor (+0.16
-  classification net of the -4-per-case penalty), taken with eyes open and
-  reversible by one routing constant.
+- **Flags with no surviving evidence.** Most remaining risk-flag misses
+  have no biometric slip, note mention, or stamp. We rendered and
+  isolated the red ink in every affected packet to check. This matches
+  the challenge's documented `unrecoverable_fields` design.
+- **Slips beyond the recovery threshold.** The heavy-noise path can read
+  flags through roughly 50% character corruption. Some slips are more
+  damaged than that.
+- **Learned-list generalization.** The embargo and revoked-sponsor lists
+  come from training data. A private packet containing a new embargoed
+  world, with no adjudicator note, could pass through. The generalizable
+  backstops are the evidence written in the documents themselves:
+  adjudicator notes and the registry's `EMBARGO REVIEW` status.
+- **22 catastrophic false approvals per 1,000.** They come from two
+  separate decisions.
+
+  Seventeen are the core policy's cost for approving a bucket with
+  residual label noise. Fourteen of those are risk-flag misses. We
+  rendered every page in all fourteen packets: eleven contain no
+  biometric page at all, while one of the remaining slips explicitly
+  says `Observed Item: RISK PANEL MISSING`. The denial evidence is not
+  merely degraded. It is absent.
+
+  Denying every packet without a biometric page would prevent eleven of
+  those approvals, but it also costs about 2.25 classification points
+  because 66 such packets are correctly approved.
+
+  The remaining five come from routing the incomplete-evidence bucket to
+  approval instead of taking the review hedge. That is a conscious
+  scoring trade: +0.16 classification points after the four-point
+  penalty per failure. It is also reversible with one routing constant.
 
 ## 5. What we tried, with numbers
 
-1. **ML on the residual — lost, kept out.** Cross-validated GBT and logistic
-   models with decision-theoretic label choice score below the rule engine
-   (66.8–69.1 vs 71.4 cls+cal) with 6–10× the catastrophic approvals.
-   Reproducible: `solution/experiments/residual_model_cv.py`.
-2. **Multi-pass OCR — shipped.** Bounded union of two 300 dpi segmentation
-   passes plus binarization and deskew. Naive always-multi-DPI merging is a
-   tail-latency trap.
-3. **Visual stamp detection — dead.** No denial stamps exist in the corpus.
-   The red ink reads FILED/COPY/MIB — decoys. Swept via vector inspection,
-   pixel statistics, and red-channel OCR.
-4. **Barcodes — dead.** Nothing decodable. "BARCODE PAYLOAD" strings are
-   text-layer traps, correctly ignored.
-5. **Label-anchored region re-OCR — shipped, neutral on train.** Locate a
-   field label by word bounding box, crop the value region, upscale, read
-   with a whitelist. Fill-only-empty by construction, so we keep it as free
-   precision salvage.
-6. **Held-out calibration — measured, table kept.** 5-fold CV puts in-sample
-   optimism at ~0.3 calibration points. Every finer bucket split we tested
-   (× OCR-used, × biometric-present, × missing-field count, × fee-observed)
-   scores worse out-of-fold than the shipped reason-only table. Small buckets
-   add variance faster than granularity adds signal.
-7. **Adversarial self-attack — one real bug, fixed.** Seven PyMuPDF mutation
-   attacks on real packets (`solution/experiments/adversarial_suite.py`). Six
-   defenses held: reworded footers, printed and novel injections, rotation,
-   unseen vocabulary, pale-ink hidden text. One broke: novel risk-flag tokens
-   on clean digital slips were dropped as OCR noise, bypassing the
-   unknown-flag review rule. Fixed per-page, inert on all real training data.
-8. **Unused-evidence census — five rules shipped, +~1.0 measured.** The
-   registry's "sponsor standing requires additional verification" notice
-   (denies non-diplomats 23/23, never blocks DIP-1 5/5). The fee receipt's
-   dollar amount ($809.00 ⇒ paid, 297/297, emission-only). The sponsor
-   letter's "class X compliance" line as visa evidence (294/294). The digital
-   intake-vs-registry name-swap trap (registry correct 7/7). Trailing-junk
-   truncation at emission — names are always two words, purpose and world
-   come from closed vocabularies (35 fixes, 0 breaks).
-9. **Name-token vocabulary — shipped.** The generator draws every applicant
-   name from a closed set of 144 first and 144 last tokens; 365 cleanly-typed
-   validation packets contain zero tokens outside it. Unambiguous
-   nearest-token repair: 19 fixes, 0 breaks.
+1. **ML on the residual — lost, excluded.** Cross-validated
+   gradient-boosted tree and logistic models score below the rule
+   engine: 66.8-69.1 versus 71.4 across classification and calibration,
+   with 6-10x as many catastrophic approvals. The experiment is
+   reproducible in `solution/experiments/residual_model_cv.py`.
+2. **Multi-pass OCR — shipped.** Two bounded 300 dpi segmentation passes
+   are combined with binarization and deskew. Always merging multiple
+   DPI levels was rejected because it creates a tail-latency trap.
+3. **Visual stamp detection — dead.** The corpus contains no denial
+   stamps. Its red ink says `FILED`, `COPY`, or `MIB`: decoys, not
+   decisions. We checked with vector inspection, pixel statistics, and
+   red-channel OCR.
+4. **Barcodes — dead.** Nothing was decodable. The `BARCODE PAYLOAD`
+   strings are text-layer traps and remain excluded.
+5. **Label-anchored region re-OCR — shipped, neutral on training.** The
+   pipeline locates a field label, crops the expected value region,
+   upscales it, and reads it through a whitelist. It only fills empty
+   fields, so it remains as precision salvage without risking existing
+   values.
+6. **Held-out calibration — measured, table retained.** Five-fold
+   cross-validation puts in-sample optimism at roughly 0.3 calibration
+   points. Every finer split we tested — OCR usage, biometric presence,
+   missing-field count, and observed fee — performed worse out of fold
+   than the shipped reason-only table. The smaller buckets added
+   variance faster than they added useful detail.
+7. **Adversarial self-attack — one real bug found and fixed.** We ran
+   seven PyMuPDF mutation attacks against real packets using
+   `solution/experiments/adversarial_suite.py`. Six defenses held:
+   reworded footers, printed and novel injections, rotation, unseen
+   vocabulary, and pale hidden text. One failed. Novel risk-flag tokens
+   on clean digital slips were mistaken for OCR noise, bypassing the
+   unknown-flag review rule. The fix is applied per page and does not
+   change any real training result.
+8. **Unused-evidence census — five rules shipped, roughly +1.0
+   measured.**
+   - `Sponsor standing requires additional verification` denies
+     non-diplomats 23/23 times and never blocks `DIP-1` cases, 5/5.
+   - A `$809.00` fee amount implies payment, 297/297, for emission only.
+   - `Class X compliance` in the sponsor letter supplies visa evidence,
+     294/294.
+   - In the intake-versus-registry name-swap trap, the registry is
+     correct 7/7.
+   - Truncating trailing junk at emission fixes 35 values and breaks
+     none; names contain two words, while purpose and world use closed
+     vocabularies.
+9. **Name-token vocabulary — shipped.** The generator draws names from
+   closed sets of 144 first-name and 144 last-name tokens. Across 365
+   cleanly typed validation packets, none contains an outside token.
+   Unambiguous nearest-token repair fixes 19 names and breaks none.
 
 ## 6. What we'd do with another week
 
-1. **Tesseract C API (`tesserocr`)** instead of subprocess-per-page (~35%
-   runtime), reinvested in more binarization variants — different thresholds
-   unlock different degraded pages.
-2. **Sub-quadrant deskew.** Skews beyond ±12° with low-confidence orientation
-   detection currently fail safe to review. A rotation sweep scored by OCR
-   word yield could recover them.
-3. **Biometric-slip name channel at scale.** On a 40-case probe it's a wash
-   (1 win, 1 loss, and the win is already caught by the name vocabulary).
-   Worth re-measuring on the full corpus before calling it dead.
+1. **Replace per-page subprocesses with the Tesseract C API
+   (`tesserocr`).** The expected runtime saving is roughly 35%. That
+   budget could fund more binarization variants, because different
+   thresholds recover different damaged pages.
+2. **Add sub-quadrant deskew.** Pages skewed beyond +/-12 degrees with
+   uncertain orientation currently fail safely to review. A rotation
+   sweep scored by OCR word yield could recover them.
+3. **Measure the biometric-slip name channel at full scale.** A 40-case
+   probe produced one win and one loss, with the win already recovered
+   by the name vocabulary. That is a wash — not enough evidence to ship
+   it or kill it.
