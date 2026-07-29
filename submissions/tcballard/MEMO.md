@@ -3,24 +3,28 @@
 **Author:** tcballard
 **Solution code:** [`solution/`](../../solution) in this repository (offline, CPU-only, Dockerized)
 
-**How this was built:** with AI assistance — AI wrote code and ran
-experiments under my direction. I set the strategy, chose what to measure,
-called the ship/kill decisions, and reviewed the results. "We" in this memo
-means exactly that partnership. The full development history, including the
-dead ends, is on the solution branch.
+**How this was built:** AI wrote code and ran experiments under my
+direction. I set the strategy, chose the measurements, made the
+ship-or-kill calls, and reviewed the results. When this memo says "we,"
+it means that partnership. The complete development history — including
+the dead ends — is on the solution branch.
 
 ## 1. What this is
 
-A deterministic, trust-aware evidence engine. It scores **129.96/150**, verified through the production entrypoint, on the
-training set with 22 catastrophic false approvals in 1000 cases — 17 from
-the defensible core plus five from a deliberate expected-value trade,
-both accounted for in section 4. No ML model
-makes any decision — we tried that, measured it, and it lost (details in
-section 5).
+A deterministic, trust-aware evidence engine.
 
-The core idea: read only what is visibly on the page, resolve conflicts by the
-field manual's evidence precedence, then apply the manual's rules. Every
-constant in the system traces to a measurement.
+Run through the production entrypoint, it scores **129.96/150** on the
+training set, with 22 catastrophic false approvals across 1,000 cases.
+Seventeen come from the defensible core. Five come from a deliberate
+expected-value trade. Both are accounted for in section 4.
+
+No ML model makes a decision. We tried that, measured it, and left it
+out when it lost. The numbers are in section 5.
+
+The system follows a simple rule: read only what is visibly on the page,
+resolve conflicting evidence according to the field manual's precedence,
+then apply the manual's policy. Every constant traces back to a
+measurement.
 
 **The pipeline, in five moves:**
 
