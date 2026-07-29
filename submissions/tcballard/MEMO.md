@@ -24,34 +24,43 @@ constant in the system traces to a measurement.
 
 **The pipeline, in five moves:**
 
-1. **Extraction (`extract.py`).** PyMuPDF yields every text span with color,
-   size, and position. Each span is tagged visible or hidden — hidden means
-   white-on-white, pale ink, sub-5pt, or painted outside the page crop. Hidden
-   text never fills a field and never touches a decision. That single
-   structural rule is the entire prompt-injection defense: the planted
-   white-text "answer keys," out-of-crop instructions, and barcode payloads
-   are excluded by construction, not by keyword filter.
-2. **OCR fallback (`ocr.py`).** Per page, only where there's no usable text
-   layer. Two complementary Tesseract passes at 300 dpi (PSM 6 reads dense
-   notes, PSM 4 reads labeled field lines), deskew, orientation detection, and
-   an escalation ladder of binarization and upscaling variants for pages the
-   cheap passes leave deficient. Hard 12-second per-page timeout — Tesseract
-   will happily grind for minutes on a noisy scan if you let it. OCR recovers
-   most of the risk flags that live only on rasterized biometric slips, plus
-   ~28% of adjudicator findings.
-3. **Parsing (`parse.py`).** Each page type parses to key/value pairs and
-   merges under the manual's precedence. The robustness work lives here:
-   fuzzy label matching for OCR noise, typed-pattern sweeps for values whose
-   labels were destroyed, closed-vocabulary repair ("ANOROMEDAN" →
-   "ANDROMEDAN"), damage markers treated as absent, and fuzzy identity
-   comparison so OCR variance of one name doesn't fake an identity conflict.
-4. **Adjudication (`policy.py`).** A visible adjudicator finding is
-   authoritative — 100% accurate on training labels, ~24% of cases. Otherwise
-   the manual's rule chain runs: disqualifying flags, TRANSIT-7, revoked
-   sponsor, embargoed world, unpaid fee, staleness → DENIED; ambiguous
-   evidence → NEEDS_REVIEW. Approval requires positive, trusted evidence.
-5. **Confidence.** Each decision path reports its measured training accuracy.
-   That's the Brier-minimizing choice, and it's honest.
+1. **Extract (`extract.py`).** PyMuPDF reads every text span with its
+   color, size, and position. The first decision is structural: is this
+   text actually visible? White-on-white text, pale ink, anything below
+   5pt, and content outside the page crop are excluded before they can
+   fill a field or influence a decision. That is the prompt-injection
+   defense. Planted answer keys, out-of-crop instructions, and barcode
+   payloads never enter the evidence stream. No keyword blacklist
+   required.
+2. **Recover (`ocr.py`).** OCR runs page by page, and only when the text
+   layer is unusable. Two Tesseract passes at 300 dpi cover different
+   jobs: PSM 6 reads dense notes; PSM 4 reads labeled fields. Deskew and
+   orientation detection handle the first layer of damage. If those
+   passes come up short, the pipeline escalates through bounded
+   binarization and upscaling variants. Each page gets 12 seconds —
+   because Tesseract will happily spend minutes negotiating with a noisy
+   scan. This stage recovers most risk flags found only on rasterized
+   biometric slips, plus roughly 28% of adjudicator findings.
+3. **Parse (`parse.py`).** Each document type becomes a set of key/value
+   pairs, then merges according to the field manual's evidence
+   precedence. This is where damaged text gets repaired without
+   pretending uncertainty has disappeared: fuzzy label matching absorbs
+   OCR noise; typed-pattern sweeps recover values whose labels were
+   destroyed; closed vocabularies repair errors such as `ANOROMEDAN` →
+   `ANDROMEDAN`; damage markers count as missing; and fuzzy name
+   comparison prevents a minor OCR variation from becoming a false
+   identity conflict.
+4. **Decide (`policy.py`).** A visible adjudicator finding wins. On the
+   training set, that path is 100% accurate and covers about 24% of
+   cases. Without one, the engine follows the manual's rule chain.
+   Disqualifying flags, `TRANSIT-7`, revoked sponsors, embargoed worlds,
+   unpaid fees, and stale evidence produce `DENIED`. Ambiguous evidence
+   produces `NEEDS_REVIEW`. `APPROVED` requires positive evidence from
+   trusted sources.
+5. **Report confidence.** Every decision path returns its measured
+   training accuracy as confidence. That minimizes Brier loss — and, more
+   importantly, says exactly how much the system has earned the right to
+   believe itself.
 
 **Policy facts come from data, not hardcoding.** Embargoed worlds
 (`Wolf-1061c`, `TRAPPIST-1e`, `Eris Relay`) and revoked sponsors were
